@@ -56,6 +56,8 @@ a { color: #8ab4ff; }
 .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 11px; font-size: 13px; line-height: 1.3; white-space: nowrap; transition: background 0.12s, border-color 0.12s; }
 .btn:hover { background: var(--panel3); border-color: #45567a; }
 .btn:active { transform: translateY(1px); }
+/* ボタンの中で書き換わる記号（▶⇄⏸）。クリックの当たり判定はボタン本体に任せる（js/ui-player.js の説明を参照） */
+.btn .ico { pointer-events: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { background: #2f74ea; }
 .btn.good { background: #16a34a; border-color: #16a34a; color: #fff; }
@@ -5903,7 +5905,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       B('⏮', '前のタグへ', () => jumpEvent(-1)),
       B('−10', '10秒戻る（Shift+←）', () => app.seekBy(-10)),
       B('−2', '2秒戻る（←）', () => app.seekBy(-2)),
-      h('button', { class: 'btn play', id: 'btnPlay', title: '再生 / 一時停止（Space）', onclick: () => app.toggle() }, '▶'),
+      // 記号は span に入れ、クリックの当たり判定から外す（CSS の .ico）。押している間に記号が ▶⇄⏸ と入れ替わっても、
+      // 「押した場所」と「離した場所」がどちらもボタン自身になり、クリックが届く（Safari は、中の文字が入れ替わるとクリックにならない）
+      h('button', { class: 'btn play', id: 'btnPlay', title: '再生 / 一時停止（Space）', onclick: () => app.toggle() }, h('span', { class: 'ico' }, '▶')),
       B('+2', '2秒進む（→）', () => app.seekBy(2)),
       B('+10', '10秒進む（Shift+→）', () => app.seekBy(10)),
       B('⏭', '次のタグへ', () => jumpEvent(1)),
@@ -6190,8 +6194,10 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         h('span', { class: 'note' }, '-'),
         `${s[1]} ${P.teams[1].short}`, h('span', { class: 'dot', style: { background: BS.ui.teamColor(P, 1) } }));
     }
-    const bp = $('#btnPlay');
-    if (bp) bp.textContent = app.paused() ? '▶' : '⏸';
+    // 再生ボタンの記号は、変わったときだけ書き換える（ここは再生中、毎コマ呼ばれる。毎回書き直すと、
+    // ボタンを押している間に中の文字が入れ替わり、Safari では一時停止のクリックが届かなくなる）
+    const ico = $('#btnPlay .ico'), mark = app.paused() ? '▶' : '⏸';
+    if (ico && ico.textContent !== mark) ico.textContent = mark;
     drawTimeline();
     updateCurrentRow(false);
   }
