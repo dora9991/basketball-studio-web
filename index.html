@@ -201,6 +201,29 @@ body.wide .main { grid-template-columns: minmax(0, 0.8fr) minmax(520px, 1.2fr); 
 .court-mini { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px; }
 .court-mini svg { width: 100%; display: block; cursor: crosshair; }
 .court-mini .cap { font-size: 11.5px; color: var(--muted); text-align: center; }
+/* コート図の上の印（シュートの位置）は、クリックの当たり判定から外す。押している間に印を描き直しても、クリックはコート図に届く */
+.court-marks { pointer-events: none; }
+/* 確認モード：どこから打ったか（コート図を大きく出す。プレーのボタンと下の小さい図は、その間は隠す） */
+.revloc { display: grid; grid-template-columns: 228px minmax(0, 1fr); gap: 12px; align-items: start; background: var(--panel2); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 10px 8px 8px; margin-bottom: 10px; }
+.revloc[hidden] { display: none; }
+.revloc .rc svg { width: 100%; aspect-ratio: 1 / 1; display: block; cursor: crosshair; border-radius: 6px; }
+.revloc .rc .cap { font-size: 11px; color: var(--muted); text-align: center; margin-top: 3px; }
+.revloc .rs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.revloc .rs b { font-size: 15px; }
+.revloc .st { font-size: 13.5px; background: var(--panel3); border: 1px solid var(--line2); border-radius: 8px; padding: 5px 9px; }
+.revloc .st:empty { display: none; }
+.revloc .st.done { border-color: #16a34a; color: #86efac; }
+.revloc .note { min-height: 2.9em; }
+.revloc .row { margin-top: auto; }
+.revloc.off .rc svg { opacity: 0.4; cursor: default; }
+.revloc.nocourt { grid-template-columns: minmax(0, 1fr); border-color: var(--line2); }
+.revloc.nocourt .rc { display: none; }
+.revloc.nocourt .note { min-height: 0; }
+.pane.reviewing #pad, .pane.reviewing .tagfoot { display: none; }
+/* タグの編集画面の中のコート図 */
+.editloc { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 8px; }
+.editloc .ec svg { width: 100%; aspect-ratio: 1 / 1; display: block; cursor: crosshair; border-radius: 6px; }
+@media (max-height: 760px) { .revloc { grid-template-columns: 176px minmax(0, 1fr); } }
 .kbd { display: inline-block; font-family: var(--mono); font-size: 11px; background: var(--panel3); border: 1px solid var(--line2); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text); line-height: 1.5; }
 .keyhelp { font-size: 12px; color: var(--muted); line-height: 1.9; }
 .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; user-select: none; }
@@ -404,6 +427,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   .act .lbl-long { display: none; }
   .act .lbl-short { display: inline; }
   .tagfoot, .shotwrap, .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .revloc { grid-template-columns: 150px minmax(0, 1fr); gap: 8px; }
   .ov-prompt { font-size: 11px; padding: 3px 7px; left: 6px; bottom: 6px; }
   .ov-prompt small { display: none; }
   .ov-flash { top: 34px; right: 6px; }
@@ -648,6 +672,33 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     { id: 'ab3', label: 'トップ/ウイング3P', short: 'トップ3' }
   ];
   BS.zoneLabel = (id) => (BS.ZONES.find((z) => z.id === id) || { label: '位置なし' }).label;
+
+  /* ---------- コート図の向き ----------
+     シュート位置はいつも「ゴールを上にしたハーフコート」の座標（sx, sy）で持つ。画面に描くときだけ、図を回して見せる。
+     確認モードでは、図を映像と同じ向きにそろえる（図の下＝手前＝カメラ側）と、見たままの場所を押せる。
+       0＝ゴールが上（カメラがコートの端から、奥のゴールを見ている）
+      90＝ゴールが右／270＝ゴールが左（カメラがコートの横から見ている）
+     180＝ゴールが下（手前のゴールを、後ろ側から見ている）
+     図の単位は 10cm（横 150 × 縦 142）。回すのは「回転」だけ（鏡写しにはしない）なので、左右が入れ替わることはない */
+  BS.COURT_ROTS = [0, 90, 180, 270];
+  BS.courtXform = function (rot) {
+    const W = 150, H = 142;
+    rot = ((Math.round((rot || 0) / 90) * 90) % 360 + 360) % 360;
+    if (rot === 90) return { rot, w: H, h: W, svg: `translate(${H},0) rotate(90)`, toView: (x, y) => [H - y, x], toCourt: (u, v) => [v, H - u] };
+    if (rot === 180) return { rot, w: W, h: H, svg: `translate(${W},${H}) rotate(180)`, toView: (x, y) => [W - x, H - y], toCourt: (u, v) => [W - u, H - v] };
+    if (rot === 270) return { rot, w: H, h: W, svg: `translate(0,${W}) rotate(-90)`, toView: (x, y) => [y, W - x], toCourt: (u, v) => [W - v, u] };
+    return { rot: 0, w: W, h: H, svg: '', toView: (x, y) => [x, y], toCourt: (u, v) => [u, v] };
+  };
+  /* ゴールの指定（バックボードの枠とリング）から、図の向きの初期値を決める。
+     横から見たゴールは、リングが板からコートの内側へ突き出して見える：リングが板の中心より右にあれば、コートは右へ広がる（＝ゴールは左）。
+     板のほぼ正面にリングがあれば、コートの端から見ている（＝ゴールは上）。合わないときは、利用者が画面で回せる */
+  BS.courtRotOfMark = function (mark) {
+    if (!mark || !mark.box || !mark.rim || !(mark.box.w > 0)) return 0;
+    const off = (mark.rim.cx - (mark.box.x + mark.box.w / 2)) / mark.box.w;
+    if (off > 0.12) return 270;
+    if (off < -0.12) return 90;
+    return 0;
+  };
 
   /* プレータイプ（Synergy の分類を中学・高校向けに簡略化） */
   BS.PLAYS = [
@@ -6251,16 +6302,20 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   let app = null, pane = null;
   let onKey = '';
   let lastOnCheck = 0;
+  let mini = null;      // タグ付けタブの下にある小さいコート図
+  let rev = null;       // 確認モードのコート図と、そのまわりの表示
 
   function init(a) {
     app = a;
     pane = document.querySelector('.pane[data-pane="tag"]');
+    mini = makeCourt({ id: 'miniCourt', marksId: 'miniMarks', rot: 0, onPick: (sx, sy) => app.tag({ k: 'loc', sx, sy }) });
     pane.append(
       h('div', { class: 'prompt', id: 'tagPrompt' }),
+      buildReviewLoc(),
       h('div', { class: 'rosters', id: 'rosters' }),
       h('div', { class: 'pad', id: 'pad' }),
       h('div', { class: 'tagfoot' },
-        h('div', { class: 'court-mini' }, courtSVG(), h('div', { class: 'cap' }, 'シュート位置（任意）：クリック')),
+        h('div', { class: 'court-mini' }, mini.svg, h('div', { class: 'cap' }, 'シュート位置（任意）：クリック')),
         h('div', null,
           h('label', { class: 'switch', title: '選手やプレーを入力し始めたら映像を止め、入力が終わったら再生に戻す' },
             h('input', { type: 'checkbox', id: 'autoPause', onchange: (e) => { app.store.project.settings.autoPause = e.target.checked; } }), 'タグ入力中は一時停止'),
@@ -6360,44 +6415,85 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     box.className = 'prompt' + (busy ? ' busy' : '');
     box.innerHTML = '';
     const rl = BS.review && BS.review.label();
-    box.append(h('b', null, rl || p.main), h('small', null, rl ? `${p.main}　${p.hint}` : p.hint));
+    const ev = rl ? BS.review.cur() : null;
+    const asking = !st.flow || st.flow.kind === 'assign';      // 確認モードで「誰？」を聞いている（＝アシストなど、ほかの質問の途中ではない）
+    const needLoc = !!(ev && BS.review.needLoc(ev));
+    const askLoc = needLoc && BS.review.confirmed(ev) && asking;      // 選手はもう入っていて、あとは場所だけ
+    const sub = !rl ? p.hint
+      : askLoc ? '📍 どこから打った？　下のコート図をクリック ・ →＝場所なしで次へ'
+        : `${p.main}　${p.hint}${needLoc && asking ? ' ・ 場所は下のコート図をクリック' : ''}`;
+    box.append(h('b', null, rl || p.main), h('small', null, sub));
     const ops = h('div', { class: 'opts' });
     if (p.options) p.options.forEach((o) => ops.appendChild(h('button', { class: 'btn small', onclick: () => app.tag({ k: 'option', v: o.v }) }, h('span', { class: 'kbd' }, String(o.v)), ' ', o.label)));
-    if (rl && st.flow && st.flow.kind === 'assign') {
+    if (rl && asking) {
       // 確認モード：キーでもクリックでも直せるように、操作をボタンで並べる
-      const ev = BS.review.cur();
       const kb = (code, key, text) => h('button', { class: 'btn small', onclick: () => BS.review.key({ code }) }, h('span', { class: 'kbd' }, key), ' ' + text);
-      if (ev && (ev.type === 'shot' || ev.type === 'ft')) ops.append(kb('KeyW', 'W', '2点'), kb('KeyR', 'R', '3点'), kb('KeyF', 'F', 'FT'), kb('KeyM', 'M', '成功⇄失敗'));
-      ops.append(kb('Delete', 'Del', '誤検出'), kb('ArrowRight', '→', '次へ'), kb('Escape', 'Esc', '終了'));
+      if (ev && (ev.type === 'shot' || ev.type === 'ft')) {
+        // 場所を入れる設定のときは、2点／3点は場所から決まるので、ボタンは出さない（W・R のキーは効く。押すと、その点数を優先する）
+        if (!BS.review.wantsLoc()) ops.append(kb('KeyW', 'W', '2点'), kb('KeyR', 'R', '3点'));
+        ops.append(kb('KeyF', 'F', 'FT'), kb('KeyM', 'M', '成功⇄失敗'));
+      }
+      if (BS.review.mode !== 'loc') ops.append(kb('Delete', 'Del', '誤検出'));
+      if (BS.review.wantsLoc()) ops.append(kb('ArrowLeft', '←', '前へ'));      // 1行に収まる数だけ出す（← のキーは、どちらの設定でも効く）
+      ops.append(kb('ArrowRight', '→', '次へ'), kb('Escape', 'Esc', '終了'));
     } else if (st.flow || st.act || st.sel) {
       ops.appendChild(h('button', { class: 'btn small', onclick: () => app.tag({ k: 'enter' }) }, h('span', { class: 'kbd' }, 'Enter'), st.flow ? ' 省略' : ' 確定'));
       ops.appendChild(h('button', { class: 'btn small', onclick: () => app.tag({ k: 'esc' }) }, h('span', { class: 'kbd' }, 'Esc'), ' 取消'));
     }
     if (ops.children.length) box.appendChild(ops);
     document.querySelectorAll('.act').forEach((b) => b.classList.toggle('sel', b.dataset.act === st.act));
-    BS.uiPlayer.setPrompt(rl ? { main: rl, hint: `${p.main}（番号キー）・Delete＝誤検出・→＝次へ` } : p, busy);
+    BS.uiPlayer.setPrompt(rl ? { main: rl, hint: askLoc ? '📍 どこから打った？ コート図をクリック・→＝場所なしで次へ' : `${p.main}（番号キー）${needLoc && asking ? '＋コート図で場所' : ''}・Delete＝誤検出・→＝次へ` } : p, busy);
     const ap = $('#autoPause');
     if (ap) ap.checked = !!app.store.project.settings.autoPause;
+    if (pane) pane.classList.toggle('reviewing', !!rl);      // 確認モードの間は、プレーのボタンと下の小さいコート図を隠す（CSS）
+    renderReviewLoc();
     drawCourtMarks();
   }
 
-  /* ---------- シュート位置（ハーフコート） ---------- */
-  function courtSVG() {
+  /* ---------- コート図（ハーフコート） ----------
+     opts.rot      図の向き（BS.courtXform。0＝ゴールが上）
+     opts.onPick   クリックした場所（sx, sy：メートル。いつも「ゴールが上」の座標）
+     opts.onHover  マウスの下の場所（図の外へ出たら null） */
+  function makeCourt(opts) {
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('viewBox', '0 0 150 142');
-    svg.id = 'miniCourt';
-    svg.innerHTML = courtLines('#e9d5b5');
+    if (opts.id) svg.id = opts.id;
+    const g = document.createElementNS(ns, 'g');      // 回すのは、この中身だけ
+    const lines = document.createElementNS(ns, 'g');
+    lines.innerHTML = courtLines('#e9d5b5');
+    // 印は、クリックの当たり判定から外す（CSS の .court-marks）。押している間に印を描き直しても、クリックはコート図に届く
     const marks = document.createElementNS(ns, 'g');
-    marks.id = 'miniMarks';
-    svg.appendChild(marks);
-    svg.addEventListener('click', (ev) => {
+    marks.setAttribute('class', 'court-marks');
+    if (opts.marksId) marks.id = opts.marksId;
+    g.append(lines, marks);
+    svg.appendChild(g);
+    let xf = null;
+    function setRot(rot) {
+      xf = BS.courtXform(rot);
+      svg.setAttribute('viewBox', `0 0 ${xf.w} ${xf.h}`);
+      if (xf.svg) g.setAttribute('transform', xf.svg); else g.removeAttribute('transform');
+    }
+    setRot(opts.rot || 0);
+    /* 画面の座標 → コートの座標。図を回していても、ブラウザが持っている変換の逆をかければ求まる */
+    const at = (ev) => {
       const pt = svg.createSVGPoint();
       pt.x = ev.clientX; pt.y = ev.clientY;
-      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
-      app.tag({ k: 'loc', sx: Math.round(p.x) / 10, sy: Math.round(p.y) / 10 });
-    });
-    return svg;
+      const q = pt.matrixTransform(g.getScreenCTM().inverse());
+      return { sx: BS.clamp(Math.round(q.x), 0, 150) / 10, sy: BS.clamp(Math.round(q.y), 0, 142) / 10 };
+    };
+    svg.addEventListener('click', (ev) => { const q = at(ev); if (opts.onPick) opts.onPick(q.sx, q.sy); });
+    if (opts.onHover) {
+      svg.addEventListener('mousemove', (ev) => { const q = at(ev); opts.onHover(q.sx, q.sy); });
+      svg.addEventListener('mouseleave', () => opts.onHover(null, null));
+    }
+    /* コートの座標 → 画面の座標（デモやテストが、その場所を押すため） */
+    const pointOf = (sx, sy) => {
+      const pt = svg.createSVGPoint();
+      pt.x = sx * 10; pt.y = sy * 10;
+      const q = pt.matrixTransform(g.getScreenCTM());
+      return { x: q.x, y: q.y };
+    };
+    return { svg, marks, setRot, pointOf, rot: () => xf.rot };
   }
   /* 1単位 = 10cm。ベースライン y=0、ゴール (75, 15.75) */
   function courtLines(stroke) {
@@ -6418,22 +6514,96 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       <path d="M${bx - 18} 140 A18 18 0 0 1 ${bx + 18} 140" fill="none" stroke="${stroke}" stroke-width="0.8"/>
       <line x1="0" y1="140" x2="150" y2="140" stroke="${stroke}" stroke-width="0.8"/>`;
   }
+  /* シュートの印（成功＝丸、失敗＝×）と、目立たせる輪 */
+  function markHTML(e, col, op) {
+    const x = e.sx * 10, y = e.sy * 10;
+    return e.made ? `<circle cx="${x}" cy="${y}" r="3" fill="${col}" stroke="#fff" stroke-width="0.6" opacity="${op}"/>`
+      : `<path d="M${x - 2.6} ${y - 2.6} L${x + 2.6} ${y + 2.6} M${x + 2.6} ${y - 2.6} L${x - 2.6} ${y + 2.6}" stroke="${col}" stroke-width="1.4" opacity="${op}"/>`;
+  }
+  const ringHTML = (sx, sy) => `<circle cx="${sx * 10}" cy="${sy * 10}" r="4.5" fill="none" stroke="#fbbf24" stroke-width="1.6"><animate attributeName="r" values="3;6;3" dur="1.2s" repeatCount="indefinite"/></circle>`;
+  /* 中身が変わったときだけ描き直す */
+  function setMarks(g, html) { if (g.__html !== html) { g.__html = html; g.innerHTML = html; } }
   function drawCourtMarks() {
-    const g = document.getElementById('miniMarks');
-    if (!g || !app) return;
+    if (!app || !mini) return;
     const P = app.store.project;
     const st = app.tagger.state();
-    const shots = P.events.filter((e) => e.type === 'shot' && e.sx != null).sort((a, b) => b.t - a.t).slice(0, 12);
+    const located = P.events.filter((e) => e.type === 'shot' && e.sx != null).sort((a, b) => b.t - a.t);
     let html = '';
-    shots.forEach((e, i) => {
-      const col = BS.ui.teamColor(P, e.team);
-      const op = (1 - i / 14).toFixed(2);
-      const x = e.sx * 10, y = e.sy * 10;
-      html += e.made ? `<circle cx="${x}" cy="${y}" r="3" fill="${col}" stroke="#fff" stroke-width="0.6" opacity="${op}"/>`
-        : `<path d="M${x - 2.6} ${y - 2.6} L${x + 2.6} ${y + 2.6} M${x + 2.6} ${y - 2.6} L${x - 2.6} ${y + 2.6}" stroke="${col}" stroke-width="1.4" opacity="${op}"/>`;
+    located.slice(0, 12).forEach((e, i) => { html += markHTML(e, BS.ui.teamColor(P, e.team), (1 - i / 14).toFixed(2)); });
+    if (st.pendingLoc) html += ringHTML(st.pendingLoc.sx, st.pendingLoc.sy);
+    setMarks(mini.marks, html);
+    if (rev && BS.review && BS.review.active) {
+      // 確認モード：同じゴールで打った最近のシュートを薄く。いま確認しているシュートは、輪で目立たせる
+      const ev = BS.review.cur();
+      let h2 = '';
+      located.filter((e) => !ev || (e.id !== ev.id && (ev.hoop == null || e.hoop == null || e.hoop === ev.hoop))).slice(0, 10)
+        .forEach((e) => { h2 += markHTML(e, BS.ui.teamColor(P, e.team), '0.35'); });
+      if (ev && ev.type === 'shot' && ev.sx != null) h2 += markHTML(ev, BS.ui.teamColor(P, ev.team), '1') + ringHTML(ev.sx, ev.sy);
+      setMarks(rev.court.marks, h2);
+    }
+  }
+
+  /* ---------- 確認モード：どこから打ったか ----------
+     番号キーで「誰が」、このコート図のクリックで「どこから」。図は映像と同じ向きにそろえて見せる（BS.courtXform）。
+     クリックした場所から、2点／3点も決まる（BS.review.setLoc）。 */
+  function buildReviewLoc() {
+    let hover = null;
+    const court = makeCourt({
+      id: 'revCourt', rot: 0,
+      onPick: (sx, sy) => { if (BS.review.active) BS.review.setLoc(sx, sy); },
+      onHover: (sx, sy) => { hover = sx == null ? null : { sx, sy }; renderReviewLoc(); }
     });
-    if (st.pendingLoc) html += `<circle cx="${st.pendingLoc.sx * 10}" cy="${st.pendingLoc.sy * 10}" r="4.5" fill="none" stroke="#fbbf24" stroke-width="1.6"><animate attributeName="r" values="3;6;3" dur="1.2s" repeatCount="indefinite"/></circle>`;
-    g.innerHTML = html;
+    const title = h('b', { id: 'revTitle' }), who = h('div', { class: 'st', id: 'revWho' }), where = h('div', { class: 'st', id: 'revWhere' });
+    const hint = h('div', { class: 'note', id: 'revHint' }), cap = h('div', { class: 'cap' });
+    const rot = h('button', { class: 'btn small', id: 'revRot', title: '図の向きが映像と合わないときに押します。向きは、ゴールごとに覚えます', onclick: () => BS.uiAuto.rotateCourt(BS.review.cur()) }, '↻ 図の向きを変える');
+    const tog = h('input', { type: 'checkbox', id: 'revLocOn', onchange: (e) => BS.uiAuto.setReviewLoc(e.target.checked) });
+    const box = h('div', { class: 'revloc', id: 'revLoc', hidden: true },
+      h('div', { class: 'rc' }, court.svg, cap),
+      h('div', { class: 'rs' }, title, who, where, hint,
+        h('div', { class: 'row' }, rot, h('label', { class: 'switch', title: '外すと、番号キーだけで次の場面へ進みます（場所は入りません）' }, tog, 'シュートの場所も入れる'))));
+    rev = { box, court, title, who, where, hint, cap, rot, tog, hover: () => hover };
+    return box;
+  }
+  function renderReviewLoc() {
+    if (!rev) return;
+    const active = !!(BS.review && BS.review.active);
+    if (rev.box.hidden === active) rev.box.hidden = !active;
+    if (!active) return;
+    const P = app.store.project;
+    const ev = BS.review.cur();
+    const on = BS.review.wantsLoc();
+    const isShot = !!(ev && ev.type === 'shot');
+    const set = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+    if (rev.tog.checked !== on) rev.tog.checked = on;
+    rev.tog.parentElement.hidden = BS.review.mode === 'loc';      // 「場所だけ入れる」の間は、この切り替えは出さない
+    rev.box.classList.toggle('nocourt', !on);
+    rev.box.classList.toggle('off', on && !isShot);
+    rev.rot.hidden = !on;
+    if (!on) {
+      set(rev.title, 'シュートの場所は入れない設定です');
+      set(rev.who, ''); set(rev.where, '');
+      set(rev.hint, '入れると、個人ごとのショット図が出て、2点／3点も場所から自動で決まります。');
+      return;
+    }
+    const r = BS.uiAuto.courtRot(ev);
+    if (rev.court.rot() !== r) rev.court.setRot(r);
+    set(rev.cap, '下が手前（カメラ側）／輪がゴール');
+    set(rev.title, isShot ? '📍 どこから打った？' : '📍 この場面は、場所を入れません');
+    const name = ev && ev.pid ? BS.clips.nameOf(P, ev.pid) : null;
+    const whoDone = !!(ev && BS.review.confirmed(ev) && name);
+    set(rev.who, `① 選手　${whoDone ? '✓ ' + name : '背番号のキー（または下の名前をクリック）'}`);
+    rev.who.classList.toggle('done', whoDone);
+    if (isShot) {
+      const z = ev.sx != null ? BS.shotZone(ev.sx, ev.sy) : null;
+      set(rev.where, `② 場所　${z ? '✓ ' + BS.zoneLabel(z.zone) + '（' + ev.pts + '点）' : 'この図をクリック'}`);
+      rev.where.classList.toggle('done', !!z);
+    } else {
+      set(rev.where, ev && ev.type === 'ft' ? '② 場所　フリースローは不要' : '② 場所　リバウンドは不要');
+      rev.where.classList.remove('done');
+    }
+    const hv = rev.hover();
+    if (hv && isShot) { const z = BS.shotZone(hv.sx, hv.sy); set(rev.hint, `ここを押すと：${BS.zoneLabel(z.zone)}（${z.three ? 3 : 2}点）`); }
+    else set(rev.hint, isShot ? '順番はどちらが先でも OK。両方入ると次の場面へ。2点／3点は場所から決まります（自分で決めるなら W／R）。' : '選手を入れると、次の場面へ進みます。');
   }
 
   function onChange() { renderRosters(); renderPrompt(); }
@@ -6446,7 +6616,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     if (key !== onKey) renderRosters();
   }
 
-  BS.uiTag = { init, onChange, onTime, renderPrompt, renderRosters, pressAction, onCourtAt, courtLines };
+  BS.uiTag = {
+    init, onChange, onTime, renderPrompt, renderRosters, pressAction, onCourtAt, courtLines, makeCourt, markHTML,
+    /* 確認モードのコート図で、その場所（sx, sy）が画面のどこにあるか（デモやテストが、そこを押すため） */
+    reviewCourtPoint: (sx, sy) => rev.court.pointOf(sx, sy)
+  };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -7631,9 +7805,23 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       f.play = h('select', null, h('option', { value: '' }, '（未分類）'), BS.PLAYS.map((p) => h('option', { value: p.id, selected: e.play === p.id }, p.label)));
       body.append(h('div', { class: 'grid2' }, h('label', { class: 'field' }, '結果', f.made), h('label', { class: 'field' }, '種類', f.pts)),
         h('div', { class: 'grid2' }, h('label', { class: 'field' }, 'アシスト', f.ast), h('label', { class: 'field' }, 'ブロック（相手）', f.blk)),
-        h('label', { class: 'field' }, 'プレーの形（任意・場面別の集計に使う）', f.play),
-        h('div', { class: 'note' }, e.sx != null ? `位置：${BS.zoneLabel(BS.shotZone(e.sx, e.sy).zone)}（${e.sx.toFixed(1)}, ${e.sy.toFixed(1)}）` : '位置：なし（タグ付けタブのコート図をクリックで記録）'),
-        e.sx != null ? h('label', { class: 'switch' }, (f.clearLoc = h('input', { type: 'checkbox' })), '位置を消す') : '');
+        h('label', { class: 'field' }, 'プレーの形（任意・場面別の集計に使う）', f.play));
+      // シュートの位置：コート図をクリックして入れる／変える。クリックすると、2P／3P も場所に合わせて変わる（そのあと「種類」で直せる）
+      f.loc = e.sx != null ? { sx: e.sx, sy: e.sy } : null;
+      const locNote = h('div', { class: 'note' });
+      const court = BS.uiTag.makeCourt({
+        rot: BS.uiAuto.courtRot(e),
+        onPick: (sx, sy) => { f.loc = { sx, sy }; f.pts.value = BS.shotZone(sx, sy).three ? '3' : '2'; drawLoc(); }
+      });
+      const clear = h('button', { class: 'btn small', onclick: () => { f.loc = null; drawLoc(); } }, '位置を消す');
+      const drawLoc = () => {
+        court.marks.innerHTML = f.loc ? BS.uiTag.markHTML({ sx: f.loc.sx, sy: f.loc.sy, made: f.made.value === '1' }, BS.ui.teamColor(P, team()), '1') : '';
+        locNote.textContent = f.loc ? `位置：${BS.zoneLabel(BS.shotZone(f.loc.sx, f.loc.sy).zone)}（図をクリックで変更）` : '位置：なし（図をクリックで記録）';
+        clear.hidden = !f.loc;
+      };
+      f.made.addEventListener('change', drawLoc);
+      body.append(h('div', { class: 'editloc' }, h('div', { class: 'ec' }, court.svg), h('div', null, locNote, h('div', { class: 'note' }, '図の下が手前（カメラ側）。クリックすると、種類（2P／3P）も場所に合わせて変わります。'), clear)));
+      drawLoc();
     }
     if (e.type === 'ft') { f.made = h('select', null, h('option', { value: '1', selected: e.made }, '成功'), h('option', { value: '0', selected: !e.made }, '失敗')); body.append(h('label', { class: 'field' }, '結果', f.made)); }
     if (e.type === 'reb') { f.off = h('select', null, h('option', { value: '1', selected: e.off }, 'オフェンス（OR）'), h('option', { value: '0', selected: !e.off }, 'ディフェンス（DR）')); body.append(h('label', { class: 'field' }, '種類', f.off)); }
@@ -7677,7 +7865,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
             if (f.in) patch.in = f.in.value || null;
             if (f.n) patch.n = Number(f.n.value);
             if (f.text) patch.text = f.text.value;
-            if (f.clearLoc && f.clearLoc.checked) { patch.sx = null; patch.sy = null; }
+            if (e.type === 'shot') { patch.sx = f.loc ? f.loc.sx : null; patch.sy = f.loc ? f.loc.sy : null; }
             if (patch.made === false) patch.ast = null;
             if (patch.made === true) patch.blk = null;
             app.store.updateEvent(e.id, patch, 'タグ編集');
@@ -7704,7 +7892,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
             li('もう1つのゴールも、映っている場面で同じように。「このゴールで得点するチーム」を選ぶ（あとで変えられます）'))),
         li(b('② 解析する'), '：「⚡ 自動解析を始める」を押して待つ（11分の動画で3〜5分）。得点・シュート失敗を自動で見つけます。'),
         li(b('③ 結果を見る・直す'), '：すぐ見るなら「🎬 ハイライト」「📊 集計」。個人の成績まで出すなら「▶ 確認モード」で、再生される場面ごとに',
-          b('シュートした選手の背番号キー'), 'を押します（3点は ', h('span', { class: 'kbd' }, 'R'), '、フリースローは ', h('span', { class: 'kbd' }, 'F'), '、シュートでなければ ', h('span', { class: 'kbd' }, 'Delete'), '、飛ばすなら ', h('span', { class: 'kbd' }, '→'), '）。')),
+          b('シュートした選手の背番号キー'), 'を押し、', b('コート図で打った場所をクリック'), 'します（順番はどちらが先でも OK。2点か3点かは、場所から自動で決まります）。',
+          h('ul', null,
+            li('コート図は、映像と同じ向きにしてあります（図の下が手前＝カメラ側）。合わないときは「↻ 図の向きを変える」。'),
+            li('フリースローは ', h('span', { class: 'kbd' }, 'F'), '、シュートでなければ ', h('span', { class: 'kbd' }, 'Delete'), '、場所を入れずに進むなら ', h('span', { class: 'kbd' }, '→'), '、前の場面に戻って直すなら ', h('span', { class: 'kbd' }, '←'), '。'),
+            li('すでに番号だけ入れてあるシュートには、③ の「📍 場所だけ入れる」で、コート図のクリックだけで場所を足せます。あとから直すときは、タグ一覧の ✎（編集）でも、コート図をクリックして場所を変えられます。')))),
       h('h4', null, 'うまくいくコツ'),
       h('ul', null,
         li('検出できるのは、', b('ゴールが画面に映っている間'), 'のシュートだけです。解析のあと「どこを調べられたか」の帯で、映っていた時間を確かめられます。'),
@@ -7984,6 +8176,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       const made = shots.filter((e) => e.made).length;
       const todo = reviewQueue().length;
       const rebTodo = M.events.filter((e) => e.auto && !e.ok && e.type === 'reb').length;
+      const locTodo = locQueue().length;
       const tn = (tm) => P.teams[tm].name;
       secRes.push(h('h3', null, '③ 結果を見る・直す'),
         h('div', { class: 'kpis' },
@@ -7993,11 +8186,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           h('div', { class: 'kpi' }, h('small', null, `スコア（${P.teams[0].short} - ${P.teams[1].short}）`), h('b', null, `${M.score[0]} - ${M.score[1]}`))),
         h('div', { class: 'row', style: { marginTop: '10px' } },
           h('button', { class: 'btn good', disabled: !todo, onclick: () => review.start() }, `▶ 確認モード（残り ${todo} 件）`),
+          locTodo ? h('button', { class: 'btn', id: 'btnLocOnly', title: '選手はもう入っていて、場所がまだのシュートを順に再生します。コート図をクリックするだけです', onclick: () => review.start('loc') }, `📍 場所だけ入れる（${locTodo} 本）`) : null,
           h('button', { class: 'btn', onclick: () => { app.showTab('hl'); } }, '🎬 ハイライトを見る'),
           h('button', { class: 'btn', onclick: () => { app.showTab('box'); } }, '📊 集計を見る')),
         h('label', { class: 'note switch', style: { display: 'block', marginTop: '6px' } },
           h('input', { type: 'checkbox', checked: c.reviewReb !== false, onchange: (e) => { c.reviewReb = e.target.checked; app.store.updateMeta({ auto: c }); } }),
           ` リバウンド（推定）も確認モードで聞く${rebTodo ? `（${rebTodo} 件）` : ''}。外すと、シュートだけを順に確認します`),
+        h('label', { class: 'note switch', style: { display: 'block', marginTop: '4px' } },
+          h('input', { type: 'checkbox', id: 'optReviewLoc', checked: c.reviewLoc !== false, onchange: (e) => setReviewLoc(e.target.checked) }),
+          ' シュートの場所も確認モードで入れる（コート図を1クリック。2点／3点は場所から自動で決まり、個人ごとのショット図が出ます）'),
         h('div', { class: 'row note', style: { marginTop: '6px' } },
           `いまは「ゴールA → ${tn(c.hoopTeam[0])} の得点」「ゴールB → ${tn(c.hoopTeam[1])} の得点」（前半）として数えています。`,
           h('button', { class: 'btn small', title: '得点のチームが逆になっていたら押す。まだ確認していない自動タグのチームが、その場で入れ替わります（解析のやり直しは不要）', onclick: () => { c.hoopTeam = [1 - c.hoopTeam[0], c.hoopTeam[0]]; app.store.updateMeta({ auto: c }); } }, '⇄ 逆なら入れ替える')));
@@ -8005,15 +8202,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       secRes.push(h('div', { class: 'card note' },
           h('b', null, 'ここからの進め方'), h('br'),
           '・すぐ見るだけなら → 「🎬 ハイライトを見る」（得点シーンが切り出されています）／「📊 集計を見る」（チームの得点・シュート数）', h('br'),
-          '・個人の成績まで出すなら → 「▶ 確認モード」。場面が順に再生されるので、シュートした選手の', h('b', null, '背番号キー'), 'を押すだけです（名簿にない番号は、その場で追加されます）', h('br'),
-          h('span', { class: 'kbd' }, '番号'), ' 選手　', h('span', { class: 'kbd' }, 'W'), h('span', { class: 'kbd' }, 'R'), h('span', { class: 'kbd' }, 'F'), ' 2点/3点/FT　', h('span', { class: 'kbd' }, 'M'), ' 成功⇄失敗　',
-          h('span', { class: 'kbd' }, 'Q'), ' チーム切替　', h('span', { class: 'kbd' }, 'Delete'), ' 誤検出を消す　', h('span', { class: 'kbd' }, '→'), ' 次へ　', h('span', { class: 'kbd' }, 'Space'), ' もう一度見る'));
+          '・個人の成績まで出すなら → 「▶ 確認モード」。場面が順に再生されるので、シュートした選手の', h('b', null, '背番号キー'), 'を押し、', h('b', null, 'コート図で打った場所をクリック'), 'するだけです（順番はどちらが先でも OK。名簿にない番号は、その場で追加されます）', h('br'),
+          h('span', { class: 'kbd' }, '番号'), ' 選手　', h('span', { class: 'kbd' }, 'クリック'), ' 場所（2点/3点は場所から自動）　', h('span', { class: 'kbd' }, 'F'), ' フリースロー　', h('span', { class: 'kbd' }, 'M'), ' 成功⇄失敗　',
+          h('span', { class: 'kbd' }, 'Q'), ' チーム切替　', h('span', { class: 'kbd' }, 'Delete'), ' 誤検出を消す　', h('span', { class: 'kbd' }, '→'), ' 次へ（場所なしでも進める）　', h('span', { class: 'kbd' }, '←'), ' 前の場面に戻って直す　', h('span', { class: 'kbd' }, 'Space'), ' もう一度見る'));
       if (c.last && c.last.spans) secRes.push(coverage(c.last));
       secRes.push(h('div', { class: 'card note' },
           h('b', null, '自動でできること・できないこと'), h('br'),
           '○ 得点・シュート失敗・どちらのゴールか・外れた後のリバウンドの種類（推定）', h('br'),
-          '△ 3点／フリースロー／笛の後で無効になった得点は区別できません（確認モードで直します）', h('br'),
-          '× ゴールが画面に映っていないシュートは検出できません。「誰が」は確認モードで番号を押してください'));
+          '△ 3点／フリースロー／笛の後で無効になった得点は区別できません（確認モードで直します。3点かどうかは、コート図で場所をクリックすると決まります）', h('br'),
+          '× ゴールが画面に映っていないシュートは検出できません。「誰が」「どこから」は、確認モードで番号キーとコート図のクリックで入れてください'));
     }
 
     if (autos.length && !S.running && !S.marking) {
@@ -8414,33 +8611,80 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       h('div', { class: 'note' }, `解析方式：${how}／${last.frames} コマ／${BS.fmtTime(last.wall)} で完了`));
   }
 
-  /* ---------- 確認モード ---------- */
+  /* ---------- 確認モード ----------
+     見つけた場面を順に再生し、「誰が」を背番号のキーで、「どこから」をコート図のクリックで入れてもらう。
+     シュートは、選手と場所の両方が入ったら次の場面へ進む（順番はどちらが先でもよい。→ で場所なしのまま進める）。 */
   function reviewQueue() {
     const reb = cfg().reviewReb !== false;       // リバウンド（推定）も聞くか
     return app.model().events.filter((e) => e.auto && !e.ok && (e.type === 'shot' || e.type === 'ft' || (reb && e.type === 'reb')));
   }
+  /* 選手はもう入っているのに、場所がまだのシュート（「場所だけ入れる」で順に回る） */
+  function locQueue() {
+    return app.model().events.filter((e) => e.type === 'shot' && e.sx == null && (e.ok || !e.auto));
+  }
+  /* コート図の向き（そのシュートを打ったゴールごと）。利用者が回していなければ、ゴールの指定から決める（BS.courtRotOfMark） */
+  function courtRot(ev) {
+    const i = ev && ev.hoop;
+    if (i == null) return 0;
+    const c = cfg();
+    const r = c.courtRot && c.courtRot[i];
+    return r != null ? r : BS.courtRotOfMark(c.hoops[i]);
+  }
+  function rotateCourt(ev) {
+    const i = ev && ev.hoop;
+    if (i == null) { BS.ui.toast('この場面は、どちらのゴールか分からないので、図の向きを変えられません', 'warn'); return; }
+    const c = cfg();
+    const rots = BS.COURT_ROTS;
+    c.courtRot = c.courtRot ? c.courtRot.slice() : [null, null];
+    c.courtRot[i] = rots[(rots.indexOf(courtRot(ev)) + 1) % rots.length];
+    app.store.updateMeta({ auto: c });
+    BS.uiTag.renderPrompt();
+  }
+  /* シュートの場所も確認モードで入れるか（既定は入れる） */
+  function setReviewLoc(on) {
+    const c = cfg();
+    c.reviewLoc = !!on;
+    app.store.updateMeta({ auto: c });
+    if (review.active) review.advance(true); else render();
+  }
   const review = {
     active: false, id: null, stopAt: 0,
-    start() {
-      const q = reviewQueue();
-      if (!q.length) { BS.ui.toast('確認するものはありません', 'ok'); return; }
-      review.active = true;
+    mode: 'all',       // 'all'＝まだ確認していない場面を順に／'loc'＝選手は入っていて場所がまだのシュートだけを順に（場所だけ入れる）
+    hist: [],          // 見てきた順（← で、確認済みの場面にも戻って直せるように）
+    ptsBy: null,       // この場面で W／R を押して、点数を自分で決めた（場所のクリックで上書きしない）
+    timer: 0,          // 「そろったので次へ」の待ち
+    start(mode) {
+      review.mode = mode === 'loc' ? 'loc' : 'all';
+      const q = review.queue();
+      if (!q.length) { BS.ui.toast(review.mode === 'loc' ? '場所がまだのシュートはありません' : '確認するものはありません', 'ok'); return; }
+      review.active = true; review.hist = [];
       app.showTab('tag');
       review.show(q[0].id);
     },
+    /* これから回る場面 */
+    queue() { return review.mode === 'loc' ? locQueue() : reviewQueue(); },
+    /* 選手がもう決まっている場面か（自動で見つけたものは確認済み、手で入れたタグは最初から） */
+    confirmed(ev) { return !!ev && (!!ev.ok || !ev.auto); },
     stop(silent) {
       if (!review.active) return;
-      review.active = false; review.id = null;
+      clearTimeout(review.timer);
+      review.active = false; review.id = null; review.hist = []; review.ptsBy = null; review.mode = 'all';
       app.tagger.reset();
       app.pause();
       if (!silent) BS.ui.toast('確認モードを終了しました', 'ok');
       BS.uiTag.renderPrompt();
     },
     cur() { return app.store.project.events.find((e) => e.id === review.id) || null; },
+    /* シュートの場所も聞く設定か */
+    wantsLoc() { return review.mode === 'loc' || cfg().reviewLoc !== false; },
+    /* この場面は、これから場所を入れてもらうか（シュートで、まだ場所がなく、聞く設定のとき） */
+    needLoc(ev) { return !!ev && ev.type === 'shot' && ev.sx == null && review.wantsLoc(); },
     show(id) {
       const e = app.store.project.events.find((x) => x.id === id);
       if (!e) { review.next(); return; }
-      review.id = id;
+      clearTimeout(review.timer);
+      review.id = id; review.ptsBy = null;
+      if (review.hist[review.hist.length - 1] !== id) review.hist.push(id);
       const lead = e.type === 'reb' ? 2.5 : 2.2;
       review.stopAt = (e.tDet != null ? e.tDet : e.t) + (e.type === 'reb' ? 1.5 : 1.6);
       app.seek(Math.max(0, e.t - lead), { fromReel: true });
@@ -8449,8 +8693,23 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       BS.uiTag.renderPrompt();
     },
     next(dir) {
-      const q = reviewQueue();
-      if (!q.length) { review.stop(true); BS.ui.toast('すべて確認しました 🎉', 'ok', 5000); app.showTab('box'); return; }
+      clearTimeout(review.timer);
+      if (dir === -1) {
+        // 見てきた順に戻る。確認済みの場面にも戻れるので、選手や場所を入れ直せる
+        while (review.hist.length) {
+          const id = review.hist.pop();
+          if (id !== review.id && app.store.find(id)) { review.show(id); return; }
+        }
+      }
+      const q = review.queue();
+      if (!q.length) {
+        if (dir === -1 && review.cur()) { review.show(review.id); return; }      // 戻る先がない：いまの場面をもう一度
+        const loc = review.mode === 'loc';
+        review.stop(true);
+        BS.ui.toast(loc ? '場所を入れ終わりました 🎉（ショットのタブで、選手ごとの図が見られます）' : 'すべて確認しました 🎉', 'ok', 5000);
+        app.showTab(loc ? 'shot' : 'box');
+        return;
+      }
       const cur = review.cur();
       const t = cur ? cur.t : -1;
       let nx;
@@ -8459,6 +8718,44 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       review.show(nx.id);
     },
     onTime(t) { if (review.active && t >= review.stopAt && !app.paused()) app.pause(); },
+    /* コート図でクリックした場所を、いま確認しているシュートに付ける。2点／3点も、場所から決める */
+    setLoc(sx, sy) {
+      const ev = review.cur();
+      if (!review.active || !ev) return;
+      if (!review.wantsLoc()) return;
+      if (ev.type !== 'shot') {
+        BS.uiPlayer.flash(ev.type === 'ft' ? 'フリースローには場所を付けません（W／R でシュートに直せます）' : 'リバウンドには場所を付けません', 'info');
+        return;
+      }
+      const z = BS.shotZone(sx, sy);
+      const keep = review.ptsBy === ev.id;      // W／R で決めた点数は、そのままにする
+      const pts = keep ? ev.pts : (z.three ? 3 : 2);
+      app.store.updateEvent(ev.id, { sx, sy, pts }, 'シュート位置');
+      BS.uiPlayer.flash(`シュート位置：${BS.zoneLabel(z.zone)}（${pts}点${keep && (pts === 3) !== z.three ? '。点数は W／R で決めたまま' : ''}）`, 'ok');
+      review.advance(true);
+    },
+    /* そろっていたら次の場面へ。足りなければ、そのまま待つ。
+       acted＝利用者がこの場面に何か入れた直後か（表示しただけ・W／R を押しただけでは、先へ進まない） */
+    advance(acted) {
+      if (!review.active) return;
+      clearTimeout(review.timer);
+      const ev = review.cur();
+      const go = () => { const id = review.id; review.timer = setTimeout(() => { if (review.active && review.id === id) review.next(1); }, 350); };
+      if (!ev) { go(); return; }      // 確認中のタグが消えた
+      const flow = app.tagger.state().flow;
+      const asking = !!flow && flow.kind === 'assign' && flow.ref === ev.id;      // 「誰のプレー？」を出している
+      if (flow && !asking) return;                                               // アシストなど、ほかの質問の途中
+      const complete = review.confirmed(ev) && !review.needLoc(ev);
+      if (asking) {
+        // 表示した直後、または場所を待っているところ。そろっていても、利用者が何か入れた直後でなければ進まない（← で戻って見ているだけ、など）
+        if (acted && complete) go(); else BS.uiTag.renderPrompt();
+        return;
+      }
+      // 「誰？」の入力が終わった（番号が入った）か、元に戻した直後
+      if (complete) { go(); return; }
+      app.tagger.beginAssign(ev.id);      // まだ足りない（場所がまだ／元に戻して選手が消えた）：番号キーがこの場面に効くようにして待つ
+      BS.uiTag.renderPrompt();
+    },
     /* 確認モード中のキー。処理したら true */
     key(e) {
       if (!review.active) return false;
@@ -8472,6 +8769,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         case 'Space': if (ev) { app.seek(Math.max(0, ev.t - 2.2), { fromReel: true }); app.play(); } return true;
         case 'Delete': case 'Backspace':
           if (!ev) return true;
+          if (review.mode === 'loc') { BS.uiPlayer.flash('「場所だけ入れる」の間は、タグを消せません（消すときは、タグ一覧の 🗑）', 'info'); return true; }
           app.store.removeEvent(ev.id, '誤検出を削除');
           if (app.store.find(ev.id + 'r')) app.store.removeEvent(ev.id + 'r', '誤検出を削除');
           BS.uiPlayer.flash('この検出を削除しました', 'info');
@@ -8484,28 +8782,25 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       }
       if (!ev || (flow && flow.kind !== 'assign')) return false;
       if (ev.type === 'shot' || ev.type === 'ft') {
-        if (e.code === 'KeyW') { upd({ type: 'shot', pts: 2 }, '2点シュートにしました'); return true; }
-        if (e.code === 'KeyR') { upd({ type: 'shot', pts: 3 }, '3点シュートにしました'); return true; }
-        if (e.code === 'KeyF') { upd({ type: 'ft' }, 'フリースローにしました'); return true; }
+        if (e.code === 'KeyW') { review.ptsBy = ev.id; upd({ type: 'shot', pts: 2 }, '2点シュートにしました'); return true; }
+        if (e.code === 'KeyR') { review.ptsBy = ev.id; upd({ type: 'shot', pts: 3 }, '3点シュートにしました'); return true; }
+        // フリースローは場所が要らないので、選手がもう入っていれば、これでそろう
+        if (e.code === 'KeyF') { upd({ type: 'ft' }, 'フリースローにしました'); review.advance(true); return true; }
         if (e.code === 'KeyM') { upd({ made: !ev.made, ast: null }, ev.made ? '「失敗」にしました' : '「成功」にしました'); return true; }
       }
       // 番号キーと Q 以外のプレーのキーは、確認モードでは無効（誤操作防止）
       if (/^Key[A-Z]$/.test(e.code) && e.code !== 'KeyQ') return true;
       return false;
     },
-    /* 選手が決まった（入力の流れが終わった）ら次へ */
-    onTagChange() {
-      if (!review.active) return;
-      const ev = review.cur();
-      if (!app.tagger.state().flow && (!ev || ev.ok)) setTimeout(() => { if (review.active && !app.tagger.state().flow) review.next(1); }, 350);
-    },
+    /* タグ入力の状態が変わった（番号が入った・質問が終わった・元に戻した）とき */
+    onTagChange() { review.advance(false); },
     label() {
       if (!review.active) return null;
       const ev = review.cur();
       if (!ev) return null;
-      const q = reviewQueue();
+      const q = review.queue();
       const P = app.store.project;
-      return `⚡ 確認 残り${q.length}件｜${BS.fmtTime(ev.t)} ${P.teams[ev.team] ? P.teams[ev.team].short : ''} ${ev.type === 'reb' ? (ev.off ? 'オフェンスリバウンド（推定）' : 'ディフェンスリバウンド（推定）') : ev.type === 'ft' ? 'FT' + (ev.made ? '成功' : '失敗') : ev.pts + 'P' + (ev.made ? '成功' : '失敗')}${ev.unsure ? '（入ったか要確認）' : ''}`;
+      return `${review.mode === 'loc' ? '📍 場所だけ入れる 残り' + q.length + '本' : '⚡ 確認 残り' + q.length + '件'}｜${BS.fmtTime(ev.t)} ${P.teams[ev.team] ? P.teams[ev.team].short : ''} ${ev.type === 'reb' ? (ev.off ? 'オフェンスリバウンド（推定）' : 'ディフェンスリバウンド（推定）') : ev.type === 'ft' ? 'FT' + (ev.made ? '成功' : '失敗') : ev.pts + 'P' + (ev.made ? '成功' : '失敗')}${ev.unsure ? '（入ったか要確認）' : ''}`;
     }
   };
 
@@ -8557,7 +8852,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
 
   BS.review = review;
-  BS.uiAuto = { FIG, init, render, onChange, onData, onTime, onTab, run, cancel: cancelRun, cancelMarking, setMark, drawOverlay, toScreen, state: S, reviewQueue, openEngine, remapAuto, setHalf };
+  BS.uiAuto = { FIG, init, render, onChange, onData, onTime, onTab, run, cancel: cancelRun, cancelMarking, setMark, drawOverlay, toScreen, state: S, reviewQueue, openEngine, remapAuto, setHalf, courtRot, rotateCourt, setReviewLoc, locQueue };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -8737,9 +9032,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     await sleep(r, 2600);
     unoutline(r);
 
-    // 3. 確認モード（番号キーで「誰が」を入れる）
+    // 3. 確認モード（番号キーで「誰が」、コート図のクリックで「どこから」）
     if (nShot) {
-      caption(3, '③ 「誰が」は番号キーで', '確認モードでは、見つけた場面が順に再生されます。背番号のキーを押すだけで選手が入ります。得点ならアシストも続けて聞かれます（Enter で省略）。');
+      caption(3, '③ 「誰が・どこから」を入れる', '確認モードでは、見つけた場面が順に再生されます。背番号のキーを押し、コート図で打った場所をクリックします。得点ならアシストも続けて聞かれます（Enter で省略）。');
       const rv = btnIn(autoPane(), '確認モード');
       if (rv) await click(r, rv);
       // 正解（シミュレーション）から、その場面の選手を引く
@@ -8758,15 +9053,21 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         if (!g) { await press(r, 'Delete', '誤検出を消す'); shown++; continue; }
         await sleep(r, 1700);
         if (ev.team !== g.team) await press(r, 'Q', 'チーム切替');
-        if (ev.type === 'shot' && g.type === 'shot' && g.pts === 3 && ev.pts !== 3) {
-          if (!fixed3) { caption(3, '③ 「誰が」は番号キーで', '3点シュートは「R」、フリースローは「F」、成功⇄失敗は「M」で直せます。違っていた検出は「Delete」で消せます。'); fixed3 = true; }
-          await press(r, 'R', '3点に直す');
-        }
         for (const d of noOf(g.pid)) await press(r, d, '背番号');
+        // 番号が決まるのを待つ（「1」のように、10番台の最初の数字でもある番号は、2桁目を少し待ってから決まる）
+        for (let k = 0; k < 14 && BS.review.active && BS.review.cur() && BS.review.cur().id === ev.id && !BS.review.cur().ok; k++) await sleep(r, 100);
         await sleep(r, 250);
         // 得点 → アシストを聞かれる
         if (app.tagger.state().flow && app.tagger.state().flow.kind === 'assist') {
           if (g.ast) { for (const d of noOf(g.ast)) await press(r, d, 'アシスト'); } else await press(r, 'Enter', '省略');
+        }
+        // シュートなら、コート図で打った場所をクリック（ここでは正解の位置）。2点か3点かは、場所から決まる
+        const curEv = BS.review.active ? BS.review.cur() : null;
+        if (curEv && curEv.id === ev.id && curEv.type === 'shot' && g.type === 'shot' && g.sx != null && BS.review.needLoc(curEv)) {
+          if (g.pts === 3 && !fixed3) { caption(3, '③ 「誰が・どこから」を入れる', '3点ラインの外をクリックすると、3点シュートになります。フリースローは「F」、成功⇄失敗は「M」、違っていた検出は「Delete」で直せます。'); fixed3 = true; }
+          const cv = $('#revCourt');
+          const pt = BS.uiTag.reviewCourtPoint(g.sx, g.sy), rc = cv.getBoundingClientRect();
+          await click(r, cv, { point: true, fx: (pt.x - rc.left) / rc.width, fy: (pt.y - rc.top) / rc.height });
         }
         shown++;
         await sleep(r, 700);
@@ -9154,13 +9455,17 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   function handleKey(e) {
     if (e.defaultPrevented) return false;
     const t = e.target || document.body;
-    const editable = t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '');
+    // チェックボックス・ラジオは文字を打つ場所ではないので、キー操作を止めない（クリックで切り替えたあともフォーカスが残るので、
+    // 「入力欄」扱いにすると、そのあと番号キーなどが効かなくなる）。フォーカスがあるときの Space は、ボタンと同じくブラウザに任せる（切り替え）
+    const tick = t.tagName === 'INPUT' && /^(checkbox|radio)$/i.test(t.type || '');
+    const editable = !tick && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''));
     if (BS.ui.modalOpen()) {
       if (e.key === 'Escape') { BS.ui.closeModal(); e.preventDefault && e.preventDefault(); }
       return false;
     }
     if (editable) { if (e.key === 'Escape' && t.blur) t.blur(); return false; }
     if (t.tagName === 'BUTTON' && (e.code === 'Enter' || e.code === 'Space') && e.isTrusted) return false;
+    if (tick && e.code === 'Space' && e.isTrusted) return false;
     const pd = () => { if (e.preventDefault) e.preventDefault(); };
     if (BS.uiAuto.state.running) { if (e.code === 'Escape') { pd(); BS.uiAuto.cancel(); } return true; }
     if (BS.uiAuto.state.marking) {
