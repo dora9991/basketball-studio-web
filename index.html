@@ -296,6 +296,18 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
 
 /* ハイライト */
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+/* ハイライト：主役の3つ（点を入れたところ／入れられたところ／両チーム）と、自チームの切り替え */
+.hlmain { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.hlmain .mb { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; padding: 8px 10px 9px; background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius); color: var(--text); min-width: 0; }
+.hlmain .mb:hover { border-color: #45567a; }
+.hlmain .mb b { font-size: 13.5px; }
+.hlmain .mb small { font-size: 11.5px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hlmain .mb .n { margin-top: 3px; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.hlmain .mb .n i { font-style: normal; font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+.hlmain .mb.on { background: var(--accent-soft); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.hlteam { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 2px; font-size: 12.5px; color: var(--muted); }
+.hlteam select { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 6px; color: var(--text); }
+.clip .tag.warn { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
 .presets .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .clipbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
 .clipbar label { font-size: 12.5px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
@@ -428,6 +440,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   .act .lbl-short { display: inline; }
   .tagfoot, .shotwrap, .grid2 { grid-template-columns: minmax(0, 1fr); }
   .revloc { grid-template-columns: 150px minmax(0, 1fr); gap: 8px; }
+  .hlmain { grid-template-columns: minmax(0, 1fr); }
   .ov-prompt { font-size: 11px; padding: 3px 7px; left: 6px; bottom: 6px; }
   .ov-prompt small { display: none; }
   .ov-flash { top: 34px; right: 6px; }
@@ -2746,9 +2759,13 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     foul: [4, 2.5], reb: [4, 2], mark: [5, 5], sub: [2, 2], timeout: [2, 4], period: [1, 4]
   };
 
+  /* 画面の上に大きく出す3つ（点を入れたところ／入れられたところ／両方）。ほかは小さな選択肢として並ぶ */
+  const MAIN = ['score', 'allowed', 'both'];
   const PRESETS = [
-    { id: 'score', label: '自チームの得点', hint: '得点した場面を順番に。キャプションに得点者・アシスト・スコア' },
-    { id: 'concede', label: '失点シーン（原因別）', hint: '相手の得点を「攻撃の始まり」から切り出し、原因で分類' },
+    { id: 'score', label: '自チームの得点', hint: '自チームが点を入れた場面だけを、入った瞬間の前後で切り出します。テロップに得点者・アシスト・スコア' },
+    { id: 'allowed', label: '失点（相手の得点）', hint: '相手に点を入れられた場面だけを、入った瞬間の前後で切り出します' },
+    { id: 'both', label: '両チームの得点', hint: '両チームの得点を試合の順に。テロップにどちらのチームの得点か' },
+    { id: 'concede', label: '失点の原因を見る（攻撃の始まりから）', hint: '相手の得点を「攻撃の始まり」から長めに切り出し、原因（スティール後・TO後・速攻…）で分類' },
     { id: 'three', label: '3P成功', hint: '自チームの3ポイント成功' },
     { id: 'defense', label: '好守（スティール・ブロック）', hint: '自チームのスティールとブロック' },
     { id: 'tov', label: 'ターンオーバー（反省用）', hint: '自チームのミスを前後つきで' },
@@ -2779,13 +2796,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
   function perLabel(n) { return n > 4 ? 'OT' + (n - 4) : n + 'Q'; }
 
-  /* 1つのイベントを説明する文 */
-  function describe(project, e) {
+  /* 1つのイベントを説明する文。o.unconfirmed：選手がまだ決まっていない自動タグを、何と呼ぶか（既定は「（選手未確認）」。
+     ハイライトの動画に焼き込むテロップでは、チーム名にする：「2Q 青 2P成功」） */
+  function describe(project, e, o) {
     let who = nameOf(project, e.pid);
-    if (!who && e.auto && (e.type === 'shot' || e.type === 'ft' || e.type === 'reb')) who = '（選手未確認）';
+    if (!who && e.auto && (e.type === 'shot' || e.type === 'ft' || e.type === 'reb')) who = o && o.unconfirmed != null ? o.unconfirmed : '（選手未確認）';
     switch (e.type) {
       case 'shot': {
-        let s = `${who} ${e.pts}P${e.made ? '成功' : '失敗'}`;
+        let s = `${who} ${e.pts}P${e.made ? '成功' : '失敗'}`.trim();
         if (e.made && e.ast) s += `（アシスト ${nameOf(project, e.ast)}）`;
         if (!e.made && e.blk) s += `（ブロック ${nameOf(project, e.blk)}）`;
         return s;
@@ -2838,12 +2856,16 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const dur = M.duration || project.duration || e.t + lag;
     const s = scoreAt(M, e.t, e);
     const per = M.periodAt ? M.periodAt(e.t) : 1;
+    const tm = project.teams[e.team];
     return {
       id: 'c' + e.id,
       t0: Math.max(0, e.t - lead), t1: Math.min(dur, e.t + lag), at: e.t,
-      title: `${perLabel(per)} ${describe(project, e)}`,
+      // 選手がまだ決まっていないときは、「（選手未確認）」ではなくチーム名を出す（動画に焼き込まれるので）
+      title: `${perLabel(per)} ${describe(project, e, { unconfirmed: opts.unconfirmed != null ? opts.unconfirmed : (tm ? tm.short : '') }).trim()}`,
       sub: scoreText(project, s),
-      team: e.team, evIds: [e.id], kind: e.type, cause: null, on: true
+      team: e.team, evIds: [e.id], kind: e.type, cause: null, on: true,
+      // 得点と数えたが、ネットの動きを確認できなかった（確認モードで見るまで、入ったか分からない）。一覧にだけ印を出す
+      unsure: !!(e.unsure && !e.ok)
     };
   }
 
@@ -2855,6 +2877,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       const last = out[out.length - 1];
       if (last && c.t0 <= last.t1 + gap) {
         last.t1 = Math.max(last.t1, c.t1);
+        last.unsure = !!(last.unsure || c.unsure);
         if (!last.evIds.some((id) => c.evIds.includes(id))) {
           last.title += ' ／ ' + c.title.replace(/^\S+\s/, '');
           last.evIds = last.evIds.concat(c.evIds);
@@ -2909,6 +2932,20 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return out;
   }
 
+  /* そのチームが決めた得点（シュート成功。ft を true にするとフリースロー成功も） */
+  function madeList(M, team, ft) {
+    return M.events.filter((e) => e.team === team && ((e.type === 'shot' && e.made) || (ft && e.type === 'ft' && e.made)));
+  }
+  /* 「点を入れたところ」「入れられたところ」「両方」それぞれの本数（ハイライトの画面と、解析の結果の画面に出す） */
+  function counts(project, M, opts) {
+    opts = opts || {};
+    const us = project.ourTeam != null ? project.ourTeam : 0;
+    const a = madeList(M, us, opts.ft).length, b = madeList(M, 1 - us, opts.ft).length;
+    return { score: a, allowed: b, both: a + b };
+  }
+  /* タイトルの「2Q 」のあとに、言葉を差し込む（「2Q 失点｜…」） */
+  function prefixTitle(c, text) { c.title = c.title.replace(/^(\S+)\s/, `$1 ${text}`); return c; }
+
   function build(project, M, preset, opts) {
     opts = opts || {};
     const us = project.ourTeam != null ? project.ourTeam : 0;
@@ -2916,9 +2953,17 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const ev = M.events;
     let clips = [];
     if (preset === 'score') {
-      clips = ev.filter((e) => e.team === us && ((e.type === 'shot' && e.made) || (opts.ft && e.type === 'ft' && e.made)))
-        .map((e) => clipFromEvent(project, M, e, opts));
-      clips = merge(clips);
+      clips = merge(madeList(M, us, opts.ft).map((e) => clipFromEvent(project, M, e, opts)));
+    } else if (preset === 'allowed') {
+      // 相手が決めた得点だけ。入った瞬間の前後（得点と同じ：前6秒・後2.5秒）。自チームの得点は入らない
+      clips = merge(madeList(M, them, opts.ft).map((e) => prefixTitle(clipFromEvent(project, M, e, opts), '失点｜')));
+    } else if (preset === 'both') {
+      // 両チームの得点を試合の順に。どちらのチームの得点かをテロップの先頭に出す（選手が決まっていなければ「2Q 青｜2P成功」）
+      const items = madeList(M, 0, opts.ft).concat(madeList(M, 1, opts.ft)).map((e) => {
+        const c = clipFromEvent(project, M, e, Object.assign({}, opts, { unconfirmed: '' }));
+        return prefixTitle(c, `${project.teams[e.team].short}｜`);
+      });
+      clips = merge(items);
     } else if (preset === 'concede') {
       clips = possessionClips(project, M, them, opts);
       if (opts.cause) clips = clips.filter((c) => c.cause === opts.cause);
@@ -2970,7 +3015,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return CAUSES.filter((c) => out[c.id]).map((c) => Object.assign({ id: c.id, label: c.label, short: c.short }, out[c.id]));
   }
 
-  BS.clips = { PRESETS, CAUSES, build, fromEvents, merge, describe, nameOf, perLabel, causeOf, causeLabel, causeSummary, scoreText, scoreAt, windowFor };
+  BS.clips = { PRESETS, MAIN, CAUSES, build, counts, madeList, fromEvents, merge, describe, nameOf, perLabel, causeOf, causeLabel, causeSummary, scoreText, scoreAt, windowFor };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -7163,12 +7208,37 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       pane.append(h('div', { class: 'card note' }, 'タグを付けると、得点シーン・失点シーンなどを自動で切り出してハイライトを作れます。「🏀 サンプル試合」で試せます。'));
       return;
     }
-    const us = P.ourTeam || 0;
+    const us = P.ourTeam || 0, them = 1 - us;
+    const MAIN = BS.clips.MAIN;
+    const pick = (id) => { HL.custom = null; HL.preset = id; HL.cause = null; if (id === 'player' && !HL.pid) HL.pid = bestScorer(); rebuild(); render(); drawTL(); };
     pane.append(h('h3', null, '何を集める？'));
+    // 主役の3つ：点を入れたところ／点を入れられたところ／両方。本数つき。押すと、すぐ下にそのクリップが並ぶ
+    const cnt = BS.clips.counts(P, M, { ft: HL.ft });
+    const mainBtn = (id, icon, name, sub, n) => {
+      const on = !HL.custom && HL.preset === id;
+      const b = h('button', { class: 'mb' + (on ? ' on' : ''), dataset: { preset: id }, title: BS.clips.PRESETS.find((x) => x.id === id).hint },
+        h('b', null, icon + ' ' + name), h('small', null, sub), h('span', { class: 'n' }, String(n), h('i', null, '本')));
+      b.addEventListener('click', () => pick(id));
+      return b;
+    };
+    pane.append(h('div', { class: 'hlmain' },
+      mainBtn('score', '🏀', '点を入れたところ', `${P.teams[us].name} の得点`, cnt.score),
+      mainBtn('allowed', '🛡', '点を入れられたところ', `${P.teams[them].name} の得点（失点）`, cnt.allowed),
+      mainBtn('both', '⚖', '両チームの得点', '試合の順に', cnt.both)));
+    // 自チームの切り替え（「自チーム」が逆だと、点を入れたところと入れられたところが入れ替わるので、ここで直せるようにする）
+    const ours = h('select', { id: 'hlOurTeam', title: '自チームが逆のときに切り替えます（「👥 チーム・選手」の自チームと同じ設定です）',
+      onchange: (e) => { HL.custom = null; HL.edited = false; app.store.updateMeta({ ourTeam: Number(e.target.value) }); } },
+      [0, 1].map((tm) => h('option', { value: tm, selected: us === tm }, P.teams[tm].name)));
+    pane.append(h('div', { class: 'hlteam' }, h('span', null, '自チーム'), ours, h('span', { class: 'note' }, `（相手は ${P.teams[them].name}）逆なら切り替えてください`)));
+    const cur = BS.clips.PRESETS.find((x) => x.id === HL.preset);
+    if (!HL.custom && cur) pane.append(h('p', { class: 'note', style: { margin: '2px 0 8px' } }, cur.hint));
+
+    // ほかの集め方
+    pane.append(h('div', { class: 'note', style: { margin: '10px 0 4px' } }, 'ほかの集め方'));
     const pr = h('div', { class: 'presets' });
-    BS.clips.PRESETS.forEach((p) => {
+    BS.clips.PRESETS.filter((p) => !MAIN.includes(p.id)).forEach((p) => {
       const b = h('button', { class: 'btn small' + (!HL.custom && HL.preset === p.id ? ' on' : ''), title: p.hint, dataset: { preset: p.id } }, p.label);
-      b.addEventListener('click', () => { HL.custom = null; HL.preset = p.id; HL.cause = null; if (p.id === 'player' && !HL.pid) HL.pid = bestScorer(); rebuild(); render(); drawTL(); });
+      b.addEventListener('click', () => pick(p.id));
       pr.appendChild(b);
     });
     if (HL.custom) pr.appendChild(h('button', { class: 'btn small on' }, HL.custom.label));
@@ -7183,7 +7253,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       bar.append(
         h('label', { title: '空欄なら種類ごとの標準（得点は前6秒・後2.5秒）' }, '前', h('input', { type: 'number', min: 0, max: 30, step: 0.5, placeholder: '自動', value: HL.lead == null ? '' : HL.lead, onchange: (e) => { HL.lead = e.target.value === '' ? null : Number(e.target.value); rebuild(); render(); drawTL(); } }), '秒'),
         h('label', null, '後', h('input', { type: 'number', min: 0, max: 30, step: 0.5, placeholder: '自動', value: HL.lag == null ? '' : HL.lag, onchange: (e) => { HL.lag = e.target.value === '' ? null : Number(e.target.value); rebuild(); render(); drawTL(); } }), '秒'));
-      if (HL.preset === 'score') bar.append(h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: HL.ft, onchange: (e) => { HL.ft = e.target.checked; rebuild(); render(); drawTL(); } }), 'FTも入れる'));
+      if (BS.clips.MAIN.includes(HL.preset)) bar.append(h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: HL.ft, onchange: (e) => { HL.ft = e.target.checked; rebuild(); render(); drawTL(); } }), 'FTも入れる'));
     }
     const on = HL.clips.filter((c) => c.on !== false);
     const secs = on.reduce((s, c) => s + (c.t1 - c.t0), 0);
@@ -7206,7 +7276,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     }
 
     const list = h('div', { class: 'cliplist' });
-    if (!HL.clips.length) list.append(h('div', { class: 'card note' }, '該当する場面がありません。'));
+    if (!HL.clips.length) list.append(h('div', { class: 'card note' }, !HL.custom && HL.preset === 'allowed' ? `${P.teams[them].name} の得点がまだありません。自チームが逆のときは、上の「自チーム」を切り替えてください。` : !HL.custom && HL.preset === 'score' ? `${P.teams[us].name} の得点がまだありません。自チームが逆のときは、上の「自チーム」を切り替えてください。` : '該当する場面がありません。'));
     HL.clips.forEach((c, i) => list.append(clipRow(c, i)));
     pane.append(list);
 
@@ -7232,7 +7302,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       h('input', { type: 'checkbox', checked: c.on !== false, title: '書き出しに含める', onchange: (e) => { c.on = e.target.checked; HL.edited = true; row.classList.toggle('off', !c.on); updateCount(); drawTL(); } }),
       h('span', { class: 'ix' }, i + 1),
       h('div', { class: 'tt' },
-        h('b', { title: c.caption || c.title }, c.caption || c.title, c.cause ? h('span', { class: 'tag' }, BS.clips.causeLabel(c.cause)) : null),
+        h('b', { title: c.caption || c.title }, c.caption || c.title, c.cause ? h('span', { class: 'tag' }, BS.clips.causeLabel(c.cause)) : null,
+          c.unsure ? h('span', { class: 'tag warn', title: '得点と数えましたが、ネットの動きを確認できませんでした（ボールがリングの手前を落ちただけかもしれません）。外れていたら、左のチェックを外すと動画に入りません' }, '入ったか要確認') : null),
         h('span', null, `${BS.fmtTime(c.t0, true)} 〜 ${BS.fmtTime(c.t1, true)}（${(c.t1 - c.t0).toFixed(1)}秒）　${c.sub || ''}`)),
       h('div', { class: 'cops' },
         h('button', { title: 'このクリップを再生', onclick: () => playReel([c], c.title) }, '▶'),
@@ -7382,7 +7453,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const opts = {
       title: presetLabel(), sub: `${P.teams[0].name} vs ${P.teams[1].name}`,
       endLines: [`${P.teams[0].short} ${M.score[0]} - ${M.score[1]} ${P.teams[1].short}`, P.title || '', P.date || ''],
-      accent: BS.ui.teamColor(P, us)
+      accent: BS.ui.teamColor(P, !HL.custom && HL.preset === 'allowed' ? 1 - us : us)      // 失点の動画は、点を入れた相手の色
     };
     try {
       const res = await BS.exportReel(app.media, clips, opts, (frac, label) => {
@@ -7392,7 +7463,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       }, ctrl.signal);
       if (res) {
         const base = (P.title || 'highlight').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
-        res.name = `${base}_${presetLabel().replace(/[\\/:*?"<>|\s（）：]+/g, '_').slice(0, 30)}.${res.ext}`;
+        res.name = `${base}_${presetLabel().replace(/[\\/:*?"<>|\s（）：]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30)}.${res.ext}`;
         HL.result = res;
         BS.ui.toast('ハイライト動画ができました', 'ok');
       } else BS.ui.toast('書き出しを中止しました', 'warn');
@@ -7404,8 +7475,16 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
 
   function onData() { if (!HL.edited && !HL.custom) rebuild(); }
+  /* 「点を入れたところ」「入れられたところ」などを選んだ状態で、ハイライトのタブを開く（解析の結果の画面のボタンから） */
+  function show(preset) {
+    HL.custom = null; HL.preset = preset; HL.cause = null; HL.edited = false;
+    if (preset === 'player' && !HL.pid) HL.pid = bestScorer();
+    rebuild();
+    app.showTab('hl');
+    drawTL();
+  }
 
-  BS.uiHL = { init, render, rebuild, playReel, stop, step, onTime, onData, clipsFor, reelActive: () => reel.active, state: HL, reel, doExport, presetLabel };
+  BS.uiHL = { init, render, rebuild, show, playReel, stop, step, onTime, onData, clipsFor, reelActive: () => reel.active, state: HL, reel, doExport, presetLabel };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -7891,7 +7970,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
             li('「このゴールを指定する」→ ', b('バックボード（板）全体を囲む'), ' → 拡大されるので ', b('リング（輪）の左端から右端までなぞる')),
             li('もう1つのゴールも、映っている場面で同じように。「このゴールで得点するチーム」を選ぶ（あとで変えられます）'))),
         li(b('② 解析する'), '：「⚡ 自動解析を始める」を押して待つ（11分の動画で3〜5分）。得点・シュート失敗を自動で見つけます。'),
-        li(b('③ 結果を見る・直す'), '：すぐ見るなら「🎬 ハイライト」「📊 集計」。個人の成績まで出すなら「▶ 確認モード」で、再生される場面ごとに',
+        li(b('③ 結果を見る・直す'), '：すぐ見るなら「🎬 動画にまとめる」の「🏀 点を入れたところ」「🛡 入れられたところ」（それぞれの場面だけを切り出して、そのまま動画にできます。自チームが逆ならハイライトのタブで切り替え）と「📊 集計」。個人の成績まで出すなら「▶ 確認モード」で、再生される場面ごとに',
           b('シュートした選手の背番号キー'), 'を押し、', b('コート図で打った場所をクリック'), 'します（順番はどちらが先でも OK。2点か3点かは、場所から自動で決まります）。',
           h('ul', null,
             li('コート図は、映像と同じ向きにしてあります（図の下が手前＝カメラ側）。合わないときは「↻ 図の向きを変える」。'),
@@ -8177,6 +8256,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       const todo = reviewQueue().length;
       const rebTodo = M.events.filter((e) => e.auto && !e.ok && e.type === 'reb').length;
       const locTodo = locQueue().length;
+      const us = P.ourTeam || 0;
+      const hlCnt = BS.clips.counts(P, M, {});
       const tn = (tm) => P.teams[tm].name;
       secRes.push(h('h3', null, '③ 結果を見る・直す'),
         h('div', { class: 'kpis' },
@@ -8187,8 +8268,12 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         h('div', { class: 'row', style: { marginTop: '10px' } },
           h('button', { class: 'btn good', disabled: !todo, onclick: () => review.start() }, `▶ 確認モード（残り ${todo} 件）`),
           locTodo ? h('button', { class: 'btn', id: 'btnLocOnly', title: '選手はもう入っていて、場所がまだのシュートを順に再生します。コート図をクリックするだけです', onclick: () => review.start('loc') }, `📍 場所だけ入れる（${locTodo} 本）`) : null,
-          h('button', { class: 'btn', onclick: () => { app.showTab('hl'); } }, '🎬 ハイライトを見る'),
           h('button', { class: 'btn', onclick: () => { app.showTab('box'); } }, '📊 集計を見る')),
+        // 動画にまとめる：点を入れたところだけ／入れられたところだけ（自チームは「👥 チーム・選手」か、ハイライトのタブで決める）
+        h('div', { class: 'row', style: { marginTop: '8px', alignItems: 'center' } },
+          h('span', { class: 'note' }, '🎬 動画にまとめる：'),
+          h('button', { class: 'btn', id: 'btnHlScore', title: `${P.teams[us].name}（自チーム）が点を入れた場面だけを切り出します`, onclick: () => BS.uiHL.show('score') }, `🏀 点を入れたところ（${hlCnt.score}本）`),
+          h('button', { class: 'btn', id: 'btnHlAllowed', title: `${P.teams[1 - us].name}（相手）に点を入れられた場面だけを切り出します`, onclick: () => BS.uiHL.show('allowed') }, `🛡 入れられたところ（${hlCnt.allowed}本）`)),
         h('label', { class: 'note switch', style: { display: 'block', marginTop: '6px' } },
           h('input', { type: 'checkbox', checked: c.reviewReb !== false, onchange: (e) => { c.reviewReb = e.target.checked; app.store.updateMeta({ auto: c }); } }),
           ` リバウンド（推定）も確認モードで聞く${rebTodo ? `（${rebTodo} 件）` : ''}。外すと、シュートだけを順に確認します`),
@@ -8201,7 +8286,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       if (autos.some((e) => e.unsure && !e.ok)) secRes.push(h('p', { class: 'note', style: { color: 'var(--warn)' } }, `⚠ 得点のうち ${autos.filter((e) => e.unsure && !e.ok).length} 本は、ネットの動きを確認できませんでした（ボールがリングの手前を落ちただけかもしれません）。確認モードで「入ったか要確認」と出るので、外れていたら M で直してください。`));
       secRes.push(h('div', { class: 'card note' },
           h('b', null, 'ここからの進め方'), h('br'),
-          '・すぐ見るだけなら → 「🎬 ハイライトを見る」（得点シーンが切り出されています）／「📊 集計を見る」（チームの得点・シュート数）', h('br'),
+          '・すぐ見るだけなら → 「🎬 動画にまとめる」の「🏀 点を入れたところ」「🛡 入れられたところ」（それぞれの場面だけを前後つきで切り出し、そのまま動画にできます）／「📊 集計を見る」（チームの得点・シュート数）', h('br'),
           '・個人の成績まで出すなら → 「▶ 確認モード」。場面が順に再生されるので、シュートした選手の', h('b', null, '背番号キー'), 'を押し、', h('b', null, 'コート図で打った場所をクリック'), 'するだけです（順番はどちらが先でも OK。名簿にない番号は、その場で追加されます）', h('br'),
           h('span', { class: 'kbd' }, '番号'), ' 選手　', h('span', { class: 'kbd' }, 'クリック'), ' 場所（2点/3点は場所から自動）　', h('span', { class: 'kbd' }, 'F'), ' フリースロー　', h('span', { class: 'kbd' }, 'M'), ' 成功⇄失敗　',
           h('span', { class: 'kbd' }, 'Q'), ' チーム切替　', h('span', { class: 'kbd' }, 'Delete'), ' 誤検出を消す　', h('span', { class: 'kbd' }, '→'), ' 次へ（場所なしでも進める）　', h('span', { class: 'kbd' }, '←'), ' 前の場面に戻って直す　', h('span', { class: 'kbd' }, 'Space'), ' もう一度見る'));
@@ -9137,12 +9222,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     await sleep(r, 1800);
 
     // 8. ハイライト
-    caption(8, '⑧ ハイライトを自動で作る', '得点シーンを前後つきで自動カット。失点シーンは「攻撃の始まり」から切り出して原因別に分類。並べ替え・トリム・テロップを直して、動画ファイルに書き出せます。');
+    caption(8, '⑧ ハイライトを自動で作る', '「点を入れたところ」「点を入れられたところ」だけを、入った瞬間の前後つきで自動カット。どちらも、そのまま動画に書き出せます。失点は「攻撃の始まり」から原因別に見ることもできます。並べ替え・トリム・テロップも直せます。');
     await click(r, tabBtn('hl'));
     await sleep(r, 900);
     const playBtn = Array.from(pane('hl').querySelectorAll('button')).find((b) => b.textContent.includes('連続再生'));
     if (playBtn) { await click(r, playBtn); await sleep(r, 6500); }
     BS.uiHL.stop(true);
+    // 点を入れられたところだけ（相手の得点の場面だけに切り替わる）
+    const allowed = pane('hl').querySelector('button[data-preset="allowed"]');
+    if (allowed) { await click(r, allowed); await sleep(r, 2200); }
     const concede = pane('hl').querySelector('button[data-preset="concede"]');
     if (concede) { await click(r, concede); await sleep(r, 1400); }
     const causes = pane('hl').querySelector('.causes');
