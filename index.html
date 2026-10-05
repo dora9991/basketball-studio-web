@@ -220,6 +220,22 @@ body.wide .main { grid-template-columns: minmax(0, 0.8fr) minmax(520px, 1.2fr); 
 .revloc.nocourt .rc { display: none; }
 .revloc.nocourt .note { min-height: 0; }
 .pane.reviewing #pad, .pane.reviewing .tagfoot { display: none; }
+/* 確認モード：リバウンドを数える */
+.revreb { display: flex; flex-direction: column; gap: 6px; background: var(--panel2); border: 1px solid var(--accent); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 10px; }
+.revreb[hidden] { display: none; }
+.revreb .rh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.revreb .rh b { font-size: 15px; }
+.revreb .st { font-size: 13.5px; background: var(--panel3); border: 1px solid var(--line2); border-radius: 8px; padding: 5px 9px; }
+.revreb .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.revreb .btn .lbl, .revreb .btn .kbd { pointer-events: none; }
+.revreb .btn .kbd { margin-left: 3px; }
+.revreb .tally { font-size: 13px; font-variant-numeric: tabular-nums; line-height: 1.6; }
+/* リバウンドの表（解析の結果の画面・集計のタブ） */
+.rebcard .rebhead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.rebcard .rebhead b { font-size: 14.5px; }
+.rebcard .rebhead select { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 6px; color: var(--text); }
+.rebcard .rebsum { font-size: 13px; color: var(--muted); margin-left: auto; }
+.rebcard .tbl-wrap { margin-top: 6px; }
 /* タグの編集画面の中のコート図 */
 .editloc { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 8px; }
 .editloc .ec svg { width: 100%; aspect-ratio: 1 / 1; display: block; cursor: crosshair; border-radius: 6px; }
@@ -2742,7 +2758,35 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return out;
   }
 
-  BS.model = { compute, eventsFor, sortEvents };
+  /* 指定したチームのリバウンドを、背番号ごとに数える（「何番が何本とったか」）。
+     rows：番号ごとの本数（多い順。1本以上の人だけ）／unknown：とったチームは確認したが、番号は分からないままの本数／
+     confirmed：確認ずみの合計（rows ＋ unknown）／or・dr：その内訳／
+     pending：まだ見ていない場面の数（自動で見つけた、選手もチームも推定のままのリバウンド。両チームぶん）。
+     自動の推定だけで、まだ確認していないものは、確認ずみには数えない（推定は外れることがあるため） */
+  function rebounders(project, M, tm) {
+    const T = project.teams[tm];
+    const rows = (T ? T.players : []).map((p) => M.players[p.id]).filter((pl) => pl && pl.box.reb > 0)
+      .map((pl) => ({ pid: pl.id, no: pl.no, name: pl.name || '', reb: pl.box.reb, or: pl.box.or, dr: pl.box.dr }))
+      .sort((a, b) => b.reb - a.reb || b.or - a.or || Number(a.no) - Number(b.no));
+    const mine = M.events.filter((e) => e.type === 'reb' && e.team === tm && !(e.auto && !e.ok));
+    const unknown = mine.filter((e) => !e.pid).length;
+    const or = mine.filter((e) => e.off).length;
+    const pending = M.events.filter((e) => e.type === 'reb' && e.auto && !e.ok).length;
+    return { rows, unknown, confirmed: mine.length, or, dr: mine.length - or, pending };
+  }
+
+  /* 「何番が何本」を、LINE などに貼れる文章にする */
+  function rebText(project, R, tm) {
+    const T = project.teams[tm];
+    const lines = [`${T.name} リバウンド　合計 ${R.confirmed}本（オフェンス ${R.or}・ディフェンス ${R.dr}）`];
+    R.rows.forEach((r) => lines.push(`#${r.no}${r.name ? ' ' + r.name : ''}　${r.reb}本（OR ${r.or}・DR ${r.dr}）`));
+    if (R.unknown) lines.push(`番号がわからなかった分　${R.unknown}本`);
+    if (R.pending) lines.push(`※まだ見ていない場面が ${R.pending} あります`);
+    lines.push('※ゴールが映っていた間のシュートのあとのリバウンドだけを数えています');
+    return lines.join('\n');
+  }
+
+  BS.model = { compute, eventsFor, sortEvents, rebounders, rebText };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -3472,7 +3516,16 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       if (p) { player(p.id); return; }
       // 名簿にない番号。相手チームにその番号がいるなら、チームの取り違えの可能性が高いので足さない
       const other = (proj().teams[1 - team] || { players: [] }).players.find((x) => String(x.no) === typed);
-      if (other) { flash(`${T.short} に #${typed} はいません（相手チームの番号です。Q でチーム切替）`, 'err'); changed(); return; }
+      if (other) {
+        // 両チームに同じ番号があるのは、よくあること。1回目は、チームの取り違えかもしれないので止めて、同じ番号をもう一度押したら足す
+        const key = team + ':' + typed;
+        if (!(st.dup && st.dup.key === key && Date.now() - st.dup.at < 10000)) {
+          st.dup = { key, at: Date.now() };
+          flash(`${T.short} に #${typed} はいません。相手チームには #${typed} がいます。${T.short} の #${typed} で合っていれば、もう一度「${typed}」を押してください（違うときは Q でチーム切替）`, 'err');
+          changed(); return;
+        }
+        st.dup = null;
+      }
       const pid = hooks.addPlayer ? hooks.addPlayer(team, typed) : null;
       if (!pid) { flash(`${T.short} に #${typed} はいません`, 'err'); changed(); return; }
       flash(`#${typed} を ${T.short} の名簿に追加しました（👥 チーム・選手 で名前を入れられます）`, 'info');
@@ -3716,7 +3769,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     }
     function esc() {
       const busy = st.sel || st.act || st.flow || st.pendingLoc;
-      st.sel = null; st.act = null; st.t0 = null; st.flow = null; st.pendingLoc = null;
+      st.sel = null; st.act = null; st.t0 = null; st.flow = null; st.pendingLoc = null; st.dup = null;
       if (busy) flash('入力を取り消しました', 'info');
       changed();
     }
@@ -3794,14 +3847,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       if (st.flow && st.flow.ref && st.flow.kind !== 'subin' && st.flow.kind !== 'subout' && !findEv(st.flow.ref)) { st.flow = null; changed(); }
       if (st.locTarget && !findEv(st.locTarget)) st.locTarget = null;
     }
-    function reset() { clearDigits(); st.sel = null; st.act = null; st.t0 = null; st.flow = null; st.pendingLoc = null; st.locTarget = null; changed(); }
+    function reset() { clearDigits(); st.sel = null; st.act = null; st.t0 = null; st.flow = null; st.pendingLoc = null; st.locTarget = null; st.dup = null; changed(); }
     function setTeam(t) { st.team = t; changed(); }
-    function beginAssign(evId) {
+    /* team：番号キーがまず効くチーム（省略すると、そのタグのチーム）。リバウンドの確認では、数えるチームの名簿から始める */
+    function beginAssign(evId, team) {
       const e = findEv(evId);
       if (!e) return false;
       clearDigits();
       st.sel = null; st.act = null; st.t0 = null;
-      st.flow = { kind: 'assign', team: e.team, ref: evId };
+      st.flow = { kind: 'assign', team: team != null ? team : e.team, ref: evId };
       changed();
       return true;
     }
@@ -6357,6 +6411,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     pane.append(
       h('div', { class: 'prompt', id: 'tagPrompt' }),
       buildReviewLoc(),
+      buildReviewReb(),
       h('div', { class: 'rosters', id: 'rosters' }),
       h('div', { class: 'pad', id: 'pad' }),
       h('div', { class: 'tagfoot' },
@@ -6464,9 +6519,13 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const asking = !st.flow || st.flow.kind === 'assign';      // 確認モードで「誰？」を聞いている（＝アシストなど、ほかの質問の途中ではない）
     const needLoc = !!(ev && BS.review.needLoc(ev));
     const askLoc = needLoc && BS.review.confirmed(ev) && asking;      // 選手はもう入っていて、あとは場所だけ
+    const rebMode = !!(rl && BS.review.mode === 'reb');
+    const P0 = app.store.project, us0 = P0.ourTeam || 0;
+    const actTeam = st.flow && st.flow.team != null ? st.flow.team : us0;       // 番号キーがいま効いているチーム
     const sub = !rl ? p.hint
-      : askLoc ? '📍 どこから打った？　下のコート図をクリック ・ →＝場所なしで次へ'
-        : `${p.main}　${p.hint}${needLoc && asking ? ' ・ 場所は下のコート図をクリック' : ''}`;
+      : rebMode ? `とった人の背番号（${P0.teams[actTeam].short}）・Q＝${P0.teams[1 - actTeam].short}に切替・Enter＝番号なしで確定`
+        : askLoc ? '📍 どこから打った？　下のコート図をクリック ・ →＝場所なしで次へ'
+          : `${p.main}　${p.hint}${needLoc && asking ? ' ・ 場所は下のコート図をクリック' : ''}`;
     box.append(h('b', null, rl || p.main), h('small', null, sub));
     const ops = h('div', { class: 'opts' });
     if (p.options) p.options.forEach((o) => ops.appendChild(h('button', { class: 'btn small', onclick: () => app.tag({ k: 'option', v: o.v }) }, h('span', { class: 'kbd' }, String(o.v)), ' ', o.label)));
@@ -6478,7 +6537,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         if (!BS.review.wantsLoc()) ops.append(kb('KeyW', 'W', '2点'), kb('KeyR', 'R', '3点'));
         ops.append(kb('KeyF', 'F', 'FT'), kb('KeyM', 'M', '成功⇄失敗'));
       }
-      if (BS.review.mode !== 'loc') ops.append(kb('Delete', 'Del', '誤検出'));
+      if (rebMode) ops.append(kb('Enter', 'Enter', '番号なし'));
+      if (BS.review.mode !== 'loc') ops.append(kb('Delete', 'Del', rebMode ? 'リバウンドではない' : '誤検出'));
       if (BS.review.wantsLoc()) ops.append(kb('ArrowLeft', '←', '前へ'));      // 1行に収まる数だけ出す（← のキーは、どちらの設定でも効く）
       ops.append(kb('ArrowRight', '→', '次へ'), kb('Escape', 'Esc', '終了'));
     } else if (st.flow || st.act || st.sel) {
@@ -6492,6 +6552,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     if (ap) ap.checked = !!app.store.project.settings.autoPause;
     if (pane) pane.classList.toggle('reviewing', !!rl);      // 確認モードの間は、プレーのボタンと下の小さいコート図を隠す（CSS）
     renderReviewLoc();
+    renderReviewReb();
     drawCourtMarks();
   }
 
@@ -6577,7 +6638,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     located.slice(0, 12).forEach((e, i) => { html += markHTML(e, BS.ui.teamColor(P, e.team), (1 - i / 14).toFixed(2)); });
     if (st.pendingLoc) html += ringHTML(st.pendingLoc.sx, st.pendingLoc.sy);
     setMarks(mini.marks, html);
-    if (rev && BS.review && BS.review.active) {
+    if (rev && BS.review && BS.review.active && BS.review.mode !== 'reb') {
       // 確認モード：同じゴールで打った最近のシュートを薄く。いま確認しているシュートは、輪で目立たせる
       const ev = BS.review.cur();
       let h2 = '';
@@ -6601,7 +6662,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const title = h('b', { id: 'revTitle' }), who = h('div', { class: 'st', id: 'revWho' }), where = h('div', { class: 'st', id: 'revWhere' });
     const hint = h('div', { class: 'note', id: 'revHint' }), cap = h('div', { class: 'cap' });
     const rot = h('button', { class: 'btn small', id: 'revRot', title: '図の向きが映像と合わないときに押します。向きは、ゴールごとに覚えます', onclick: () => BS.uiAuto.rotateCourt(BS.review.cur()) }, '↻ 図の向きを変える');
-    const tog = h('input', { type: 'checkbox', id: 'revLocOn', onchange: (e) => BS.uiAuto.setReviewLoc(e.target.checked) });
+    const tog = h('input', { type: 'checkbox', id: 'revLocOn', onchange: (e) => { BS.uiAuto.setReviewLoc(e.target.checked); e.target.blur(); } });
     const box = h('div', { class: 'revloc', id: 'revLoc', hidden: true },
       h('div', { class: 'rc' }, court.svg, cap),
       h('div', { class: 'rs' }, title, who, where, hint,
@@ -6611,7 +6672,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
   function renderReviewLoc() {
     if (!rev) return;
-    const active = !!(BS.review && BS.review.active);
+    const active = !!(BS.review && BS.review.active && BS.review.mode !== 'reb');
     if (rev.box.hidden === active) rev.box.hidden = !active;
     if (!active) return;
     const P = app.store.project;
@@ -6649,6 +6710,46 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const hv = rev.hover();
     if (hv && isShot) { const z = BS.shotZone(hv.sx, hv.sy); set(rev.hint, `ここを押すと：${BS.zoneLabel(z.zone)}（${z.three ? 3 : 2}点）`); }
     else set(rev.hint, isShot ? '順番はどちらが先でも OK。両方入ると次の場面へ。2点／3点は場所から決まります（自分で決めるなら W／R）。' : '選手を入れると、次の場面へ進みます。');
+  }
+
+  /* ---------- 確認モード：リバウンドを数える ----------
+     外れた場面が順に再生される。とった人の背番号のキーを押すだけ。相手がとったときは Q → Enter、番号がわからないときは Enter。
+     数えるチーム（自チーム）の名簿から始まる。ここまでの本数を、見ながら数える。 */
+  function buildReviewReb() {
+    const set1 = (id, cls) => h('span', { id, class: cls || '' });
+    const mkBtn = (id, onclick, keys) => h('button', { class: 'btn small', id, onclick }, h('span', { class: 'lbl' }), ...keys.map((k) => h('span', { class: 'kbd' }, k)));
+    return h('div', { class: 'revreb', id: 'revReb', hidden: true },
+      h('div', { class: 'rh' }, h('b', { id: 'rebTitle' }), set1('rebSub', 'note')),
+      h('div', { class: 'st', id: 'rebStep' }),
+      h('div', { class: 'row' },
+        mkBtn('rebOther', () => BS.review.rebNoPlayer('other'), ['Q', 'Enter']),
+        mkBtn('rebUnknown', () => BS.review.rebNoPlayer('focus'), ['Enter'])),
+      h('div', { class: 'tally', id: 'rebTally' }),
+      h('label', { class: 'switch', title: 'ゴールのまわりを大きく映します。背番号が読みやすくなります。ボールが遠くへ行って見えないときは、外してください' },
+        h('input', { type: 'checkbox', id: 'rebZoom', onchange: (e) => { BS.uiAuto.setRebZoom(e.target.checked); e.target.blur(); } }), '🔍 ゴールのまわりを拡大して見る（背番号が読みやすくなります）'),
+      h('div', { class: 'note', id: 'rebNote' }));
+  }
+  function renderReviewReb() {
+    const el = $('#revReb');
+    if (!el) return;
+    const on = !!(BS.review && BS.review.active && BS.review.mode === 'reb');
+    if (el.hidden === on) el.hidden = !on;
+    if (!on) return;
+    const P = app.store.project, M = app.model();
+    const us = P.ourTeam || 0, them = 1 - us;
+    const flow = app.tagger.state().flow;
+    const act = flow && flow.team != null ? flow.team : us;
+    const set = (node, text) => { if (node && node.textContent !== text) node.textContent = text; };
+    set($('#rebTitle'), `🏀 ${P.teams[us].name} のリバウンドを数える`);
+    set($('#rebSub'), `残り ${BS.review.queue().length} 場面`);
+    set($('#rebStep'), `とったのは？　背番号のキー（いま効いているのは ${P.teams[act].name} の番号。下の名前をクリックでもよい）`);
+    set($('#rebOther .lbl'), `${P.teams[them].short} がとった `);
+    set($('#rebUnknown .lbl'), `${P.teams[us].short}・番号がわからない `);
+    const R = BS.model.rebounders(P, M, us);
+    set($('#rebTally'), R.confirmed ? `ここまで　${R.rows.map((r) => `#${r.no} ×${r.reb}`).join('　')}${R.unknown ? `　番号なし ×${R.unknown}` : ''}　（合計 ${R.confirmed}本）` : 'ここまで　まだありません');
+    const zc = $('#rebZoom'), zon = BS.uiAuto.state && (app.store.project.auto || {}).rebZoom !== false;
+    if (zc && zc.checked !== zon) zc.checked = zon;
+    set($('#rebNote'), 'ゴールが映っていない間のリバウンドは、「タグ付け」タブで足せます（D → 背番号）。Space＝もう一度見る・←＝前の場面・→＝あとで');
   }
 
   function onChange() { renderRosters(); renderPrompt(); }
@@ -6696,6 +6797,57 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return el;
   }
 
+  /* =================== リバウンド（背番号ごと） =================== */
+  /* 文章をクリップボードへ。できなかったときは、選んだ状態の文章を出して、手でコピーしてもらう */
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 次の方法 */ }
+    try {
+      const ta = h('textarea', { style: { position: 'fixed', left: '-9999px', top: '0' } }, text);
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch (e) { return false; }
+  }
+  /* 「何番が何本とったか」。そのチームのリバウンドを、背番号ごとに数えた表。数字をクリックすると、その場面を連続再生。
+     opts：id／teamSelect（数えるチーム＝自チームの切り替えを出す）／onStart（まだ見ていない場面があるとき、数える確認モードを始めるボタン） */
+  function rebCard(P, M, tm, opts) {
+    opts = opts || {};
+    const R = BS.model.rebounders(P, M, tm);
+    const T = P.teams[tm];
+    const box = h('div', { class: 'card rebcard', id: opts.id || 'rebCard' });
+    const head = h('div', { class: 'rebhead' }, h('b', null, '🏀 リバウンド'));
+    if (opts.teamSelect) {
+      head.append(h('select', { class: 'rebteam', id: (opts.id || 'rebCard') + 'Team', title: '数えるチーム（「自チーム」と同じ設定です）',
+        onchange: (e) => app.store.updateMeta({ ourTeam: Number(e.target.value) }) }, [0, 1].map((x) => h('option', { value: x, selected: x === tm }, P.teams[x].name))));
+    } else head.append(h('span', { class: 'note' }, T.name));
+    head.append(h('span', { class: 'rebsum' }, R.confirmed ? `合計 ${R.confirmed}本（オフェンス ${R.or}・ディフェンス ${R.dr}）` : 'まだ数えていません'));
+    box.append(head);
+    if (R.rows.length) {
+      const q = (txt, stat, pid, lab) => linkNum(txt, { pid, stat }, lab);
+      box.append(h('div', { class: 'tbl-wrap' }, h('table', { class: 'tbl reb' },
+        h('thead', null, h('tr', null, h('th', { class: 'l' }, '背番号'), h('th', null, '本数'), h('th', { title: 'オフェンスリバウンド' }, 'OR'), h('th', { title: 'ディフェンスリバウンド' }, 'DR'))),
+        h('tbody', null, R.rows.map((r) => h('tr', null,
+          h('td', { class: 'l' }, h('span', { class: 'pn' }, h('span', { class: 'no' }, r.no), r.name || '')),
+          h('td', { class: 'hl' }, q(r.reb, 'reb', r.pid, `#${r.no} ${r.name || ''} リバウンド`)),
+          h('td', null, r.or ? q(r.or, 'or', r.pid, `#${r.no} ${r.name || ''} オフェンスリバウンド`) : '0'),
+          h('td', null, r.dr ? q(r.dr, 'dr', r.pid, `#${r.no} ${r.name || ''} ディフェンスリバウンド`) : '0'))),
+          R.unknown ? h('tr', { class: 'bench' }, h('td', { class: 'l' }, h('span', { class: 'note' }, '番号がわからなかった分')), h('td', null, R.unknown), h('td'), h('td')) : null))));
+    } else if (R.unknown) box.append(h('p', { class: 'note', style: { margin: '6px 0 0' } }, `番号がわからなかった分 ${R.unknown}本`));
+    const foot = h('div', { class: 'row', style: { marginTop: '8px', alignItems: 'center' } });
+    if (R.pending && opts.onStart) foot.append(h('button', { class: 'btn good small', id: (opts.id || 'rebCard') + 'Start', onclick: opts.onStart }, `▶ リバウンドを数える（残り ${R.pending} 場面）`));
+    if (R.confirmed) foot.append(h('button', { class: 'btn small', id: (opts.id || 'rebCard') + 'Copy', title: '背番号ごとの本数を文章にして、コピーします（LINE などに貼れます）',
+      onclick: async () => {
+        const text = BS.model.rebText(P, BS.model.rebounders(app.store.project, app.model(), tm), tm);
+        if (await copyText(text)) BS.ui.toast('コピーしました', 'ok');
+        else BS.ui.modal({ title: 'リバウンドの一覧', body: h('div', null, h('p', { class: 'note' }, 'コピーできなかったので、ここから選んでコピーしてください。'), h('textarea', { readonly: true, style: { width: '100%', minHeight: '150px', fontFamily: 'inherit' } }, text)), buttons: [{ label: '閉じる', cls: 'primary' }] });
+      } }, '📋 コピー'));
+    if (foot.children.length) box.append(foot);
+    if (R.pending) box.append(h('p', { class: 'note', style: { margin: '6px 0 0' } }, `まだ見ていない場面が ${R.pending} あります。どちらのチームがとったかも、まだ推定です（数えた分だけが、上の表に入ります）。`));
+    if (M.events.some((e) => e.auto)) box.append(h('p', { class: 'note', style: { margin: '4px 0 0' } }, '数えられるのは、ゴールが映っていた間のシュートのあとのリバウンドだけです。映っていない間の分は、「タグ付け」タブで足せます（D → 背番号）。'));
+    return box;
+  }
+
   /* =================== 集計（ボックススコア） =================== */
   const COLS = [
     { k: 'min', lab: '分', title: '出場時間（スタメン＋交代タグから計算）', fmt: (b) => (b.min ? Math.round(b.min) : '—') },
@@ -6740,6 +6892,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         qs.map((q) => h('td', { class: q.pts[tm] > q.pts[1 - tm] ? 'hl' : '' }, q.pts[tm])),
         h('td', { class: 'hl' }, M.score[tm])))));
     pane.append(h('h3', null, 'スコア'), h('div', { class: 'tbl-wrap' }, qt));
+    {
+      // どちらのチームにもリバウンドがなければ出さない。片方だけにあるときは出す（数えるチームを切り替えられなくならないように）
+      const any = [0, 1].some((x) => { const r = BS.model.rebounders(P, M, x); return r.confirmed || r.pending; });
+      if (any) pane.append(h('h3', null, 'リバウンド ', h('small', null, '何番が何本とったか')), rebCard(P, M, us, { id: 'rebCardBox', teamSelect: true, onStart: () => BS.review.start('reb') }));
+    }
 
     // 主な数字
     const U = M.teams[us], T = M.teams[1 - us];
@@ -7147,7 +7304,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       h('div', null, h('b', null, P.teams[us].short + '：'), kinds(us)), h('div', null, h('b', null, P.teams[1 - us].short + '：'), kinds(1 - us))));
   }
 
-  BS.uiStats = { init, renderBox, renderScene, renderShot, renderFoul, linkNum };
+  BS.uiStats = { init, renderBox, renderScene, renderShot, renderFoul, linkNum, rebCard };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -7975,7 +8132,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           h('ul', null,
             li('コート図は、映像と同じ向きにしてあります（図の下が手前＝カメラ側）。合わないときは「↻ 図の向きを変える」。'),
             li('フリースローは ', h('span', { class: 'kbd' }, 'F'), '、シュートでなければ ', h('span', { class: 'kbd' }, 'Delete'), '、場所を入れずに進むなら ', h('span', { class: 'kbd' }, '→'), '、前の場面に戻って直すなら ', h('span', { class: 'kbd' }, '←'), '。'),
-            li('すでに番号だけ入れてあるシュートには、③ の「📍 場所だけ入れる」で、コート図のクリックだけで場所を足せます。あとから直すときは、タグ一覧の ✎（編集）でも、コート図をクリックして場所を変えられます。')))),
+            li('すでに番号だけ入れてあるシュートには、③ の「📍 場所だけ入れる」で、コート図のクリックだけで場所を足せます。あとから直すときは、タグ一覧の ✎（編集）でも、コート図をクリックして場所を変えられます。'))),
+        li(b('🏀 リバウンドだけ数える'), '：③ の「🏀 リバウンドを数える」を押すと、シュートが外れた場面だけが順に再生されます。', b('とった選手の背番号キー'), 'を押すだけ（自チームの名簿から始まります）。相手がとったときは ', h('span', { class: 'kbd' }, 'Q'), ' → ', h('span', { class: 'kbd' }, 'Enter'), '、番号がわからないときは ', h('span', { class: 'kbd' }, 'Enter'), '。数え終わると、「何番が何本」の表が出ます。ゴールが映っていた間のシュートのあとだけが対象です（映っていない間の分は、タグ付けタブで足せます）。')),
       h('h4', null, 'うまくいくコツ'),
       h('ul', null,
         li('検出できるのは、', b('ゴールが画面に映っている間'), 'のシュートだけです。解析のあと「どこを調べられたか」の帯で、映っていた時間を確かめられます。'),
@@ -8095,6 +8253,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     cv.addEventListener('pointermove', onMove);
     cv.addEventListener('pointerup', onUp);
     root.addEventListener('resize', drawOverlay);
+    root.addEventListener('resize', () => { if (review.active && review.mode === 'reb') applyZoom(review.cur()); });
   }
   function pane() { return document.querySelector('.pane[data-pane="auto"]'); }
   function cfg() {
@@ -8267,6 +8426,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           h('div', { class: 'kpi' }, h('small', null, `スコア（${P.teams[0].short} - ${P.teams[1].short}）`), h('b', null, `${M.score[0]} - ${M.score[1]}`))),
         h('div', { class: 'row', style: { marginTop: '10px' } },
           h('button', { class: 'btn good', disabled: !todo, onclick: () => review.start() }, `▶ 確認モード（残り ${todo} 件）`),
+          rebTodo ? h('button', { class: 'btn', id: 'btnRebMode', title: `${P.teams[us].name}（自チーム）がとったリバウンドを、場面を見ながら背番号で数えます。ゴールが映っていた間のシュートが外れた場面だけが対象です`, onclick: () => review.start('reb') }, `🏀 リバウンドを数える（${P.teams[us].short}・残り ${rebTodo} 場面）`) : null,
           locTodo ? h('button', { class: 'btn', id: 'btnLocOnly', title: '選手はもう入っていて、場所がまだのシュートを順に再生します。コート図をクリックするだけです', onclick: () => review.start('loc') }, `📍 場所だけ入れる（${locTodo} 本）`) : null,
           h('button', { class: 'btn', onclick: () => { app.showTab('box'); } }, '📊 集計を見る')),
         // 動画にまとめる：点を入れたところだけ／入れられたところだけ（自チームは「👥 チーム・選手」か、ハイライトのタブで決める）
@@ -8284,9 +8444,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           `いまは「ゴールA → ${tn(c.hoopTeam[0])} の得点」「ゴールB → ${tn(c.hoopTeam[1])} の得点」（前半）として数えています。`,
           h('button', { class: 'btn small', title: '得点のチームが逆になっていたら押す。まだ確認していない自動タグのチームが、その場で入れ替わります（解析のやり直しは不要）', onclick: () => { c.hoopTeam = [1 - c.hoopTeam[0], c.hoopTeam[0]]; app.store.updateMeta({ auto: c }); } }, '⇄ 逆なら入れ替える')));
       if (autos.some((e) => e.unsure && !e.ok)) secRes.push(h('p', { class: 'note', style: { color: 'var(--warn)' } }, `⚠ 得点のうち ${autos.filter((e) => e.unsure && !e.ok).length} 本は、ネットの動きを確認できませんでした（ボールがリングの手前を落ちただけかもしれません）。確認モードで「入ったか要確認」と出るので、外れていたら M で直してください。`));
+      { const any = [0, 1].some((x) => { const r = BS.model.rebounders(P, M, x); return r.confirmed || r.pending; }); if (any) secRes.push(BS.uiStats.rebCard(P, M, us, { id: 'rebCardAuto', teamSelect: true, onStart: () => review.start('reb') })); }
       secRes.push(h('div', { class: 'card note' },
           h('b', null, 'ここからの進め方'), h('br'),
           '・すぐ見るだけなら → 「🎬 動画にまとめる」の「🏀 点を入れたところ」「🛡 入れられたところ」（それぞれの場面だけを前後つきで切り出し、そのまま動画にできます）／「📊 集計を見る」（チームの得点・シュート数）', h('br'),
+          '・リバウンドだけ知りたいなら → 「🏀 リバウンドを数える」。外れた場面が順に再生されるので、とった選手の', h('b', null, '背番号キー'), 'を押すだけです（相手がとったときは ', h('span', { class: 'kbd' }, 'Q'), ' → ', h('span', { class: 'kbd' }, 'Enter'), '、番号がわからないときは ', h('span', { class: 'kbd' }, 'Enter'), '）。自チーム（数えるチーム）は、表の上で切り替えられます', h('br'),
           '・個人の成績まで出すなら → 「▶ 確認モード」。場面が順に再生されるので、シュートした選手の', h('b', null, '背番号キー'), 'を押し、', h('b', null, 'コート図で打った場所をクリック'), 'するだけです（順番はどちらが先でも OK。名簿にない番号は、その場で追加されます）', h('br'),
           h('span', { class: 'kbd' }, '番号'), ' 選手　', h('span', { class: 'kbd' }, 'クリック'), ' 場所（2点/3点は場所から自動）　', h('span', { class: 'kbd' }, 'F'), ' フリースロー　', h('span', { class: 'kbd' }, 'M'), ' 成功⇄失敗　',
           h('span', { class: 'kbd' }, 'Q'), ' チーム切替　', h('span', { class: 'kbd' }, 'Delete'), ' 誤検出を消す　', h('span', { class: 'kbd' }, '→'), ' 次へ（場所なしでも進める）　', h('span', { class: 'kbd' }, '←'), ' 前の場面に戻って直す　', h('span', { class: 'kbd' }, 'Space'), ' もう一度見る'));
@@ -8703,6 +8865,39 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const reb = cfg().reviewReb !== false;       // リバウンド（推定）も聞くか
     return app.model().events.filter((e) => e.auto && !e.ok && (e.type === 'shot' || e.type === 'ft' || (reb && e.type === 'reb')));
   }
+  /* まだ見ていないリバウンド（「リバウンドを数える」で順に回る）。どちらのチームがとったかも、まだ推定のもの */
+  function rebQueue() {
+    return app.model().events.filter((e) => e.type === 'reb' && e.auto && !e.ok);
+  }
+  /* リバウンドを数えるとき、ゴールのまわりを拡大して見せる（背番号が読みやすくなる）。
+     映像の見える範囲を CSS で拡大するだけで、映像そのものは変えない（解析・書き出しには影響しない）。
+     拡大の倍率は、ゴールのリングが画面で約52画素になる大きさ（1.3〜2.4倍）。映像の外へ出ないように、中心を寄せる。 */
+  function rebZoomFor(ev) {
+    const slot = $('#mediaSlot');
+    if (!slot || !app.media) return null;
+    const m = ev && ev.hoop != null ? cfg().hoops[ev.hoop] : null;
+    const W = app.media.width, H = app.media.height, sw = slot.clientWidth, sh = slot.clientHeight;
+    if (!m || !m.rim || !(W > 0) || !(H > 0) || !(sw > 0) || !(sh > 0)) return null;
+    const sc = Math.min(sw / W, sh / H), vw = W * sc, vh = H * sc, ox = (sw - vw) / 2, oy = (sh - vh) / 2;
+    const z = BS.clamp(52 / Math.max(1, (m.rim.w || 40) * sc), 1.3, 2.4);
+    const clampT = (t, size, o, v) => { const lo = size - z * (o + v), hi = -z * o; return lo <= hi ? Math.min(hi, Math.max(lo, t)) : (size - z * v) / 2 - z * o; };
+    const tx = clampT(sw / 2 - z * (ox + m.rim.cx * sc), sw, ox, vw), ty = clampT(sh / 2 - z * (oy + m.rim.cy * sc), sh, oy, vh);
+    return { z, tx, ty };
+  }
+  function applyZoom(ev) {
+    const slot = $('#mediaSlot');
+    if (!slot) return;
+    const zm = review.active && review.mode === 'reb' && cfg().rebZoom !== false ? rebZoomFor(ev) : null;
+    slot.style.transformOrigin = '0 0';
+    slot.style.transition = zm ? 'transform 0.25s ease' : 'none';
+    slot.style.transform = zm ? `translate(${zm.tx.toFixed(1)}px, ${zm.ty.toFixed(1)}px) scale(${zm.z.toFixed(3)})` : '';
+  }
+  function setRebZoom(on) {
+    const c = cfg();
+    c.rebZoom = !!on;
+    app.store.updateMeta({ auto: c });
+    if (review.active) applyZoom(review.cur());
+  }
   /* 選手はもう入っているのに、場所がまだのシュート（「場所だけ入れる」で順に回る） */
   function locQueue() {
     return app.model().events.filter((e) => e.type === 'shot' && e.sx == null && (e.ok || !e.auto));
@@ -8734,26 +8929,29 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
   const review = {
     active: false, id: null, stopAt: 0,
-    mode: 'all',       // 'all'＝まだ確認していない場面を順に／'loc'＝選手は入っていて場所がまだのシュートだけを順に（場所だけ入れる）
+    mode: 'all',       // 'all'＝まだ確認していない場面を順に／'loc'＝選手は入っていて場所がまだのシュートだけを順に（場所だけ入れる）／'reb'＝リバウンドの場面だけを順に（とったのは誰か）
     hist: [],          // 見てきた順（← で、確認済みの場面にも戻って直せるように）
     ptsBy: null,       // この場面で W／R を押して、点数を自分で決めた（場所のクリックで上書きしない）
     timer: 0,          // 「そろったので次へ」の待ち
     start(mode) {
-      review.mode = mode === 'loc' ? 'loc' : 'all';
+      review.mode = mode === 'loc' ? 'loc' : mode === 'reb' ? 'reb' : 'all';
       const q = review.queue();
-      if (!q.length) { BS.ui.toast(review.mode === 'loc' ? '場所がまだのシュートはありません' : '確認するものはありません', 'ok'); return; }
+      if (!q.length) { BS.ui.toast(review.mode === 'loc' ? '場所がまだのシュートはありません' : review.mode === 'reb' ? 'まだ見ていないリバウンドの場面はありません（すべて数えました）' : '確認するものはありません', 'ok'); return; }
       review.active = true; review.hist = [];
       app.showTab('tag');
       review.show(q[0].id);
     },
     /* これから回る場面 */
-    queue() { return review.mode === 'loc' ? locQueue() : reviewQueue(); },
+    queue() { return review.mode === 'loc' ? locQueue() : review.mode === 'reb' ? rebQueue() : reviewQueue(); },
+    /* 番号キーがまず効くチーム。リバウンドを数えるときは、数えるチーム（自チーム）の名簿から。ほかは、そのタグのチーム */
+    assignTeam(ev) { return review.mode === 'reb' ? (app.store.project.ourTeam || 0) : ev.team; },
     /* 選手がもう決まっている場面か（自動で見つけたものは確認済み、手で入れたタグは最初から） */
     confirmed(ev) { return !!ev && (!!ev.ok || !ev.auto); },
     stop(silent) {
       if (!review.active) return;
       clearTimeout(review.timer);
       review.active = false; review.id = null; review.hist = []; review.ptsBy = null; review.mode = 'all';
+      applyZoom(null);
       app.tagger.reset();
       app.pause();
       if (!silent) BS.ui.toast('確認モードを終了しました', 'ok');
@@ -8761,7 +8959,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     },
     cur() { return app.store.project.events.find((e) => e.id === review.id) || null; },
     /* シュートの場所も聞く設定か */
-    wantsLoc() { return review.mode === 'loc' || cfg().reviewLoc !== false; },
+    wantsLoc() { return review.mode === 'loc' || (review.mode !== 'reb' && cfg().reviewLoc !== false); },
     /* この場面は、これから場所を入れてもらうか（シュートで、まだ場所がなく、聞く設定のとき） */
     needLoc(ev) { return !!ev && ev.type === 'shot' && ev.sx == null && review.wantsLoc(); },
     show(id) {
@@ -8771,10 +8969,12 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       review.id = id; review.ptsBy = null;
       if (review.hist[review.hist.length - 1] !== id) review.hist.push(id);
       const lead = e.type === 'reb' ? 2.5 : 2.2;
-      review.stopAt = (e.tDet != null ? e.tDet : e.t) + (e.type === 'reb' ? 1.5 : 1.6);
+      // リバウンドを数えるときは、誰がボールをとったかが見えるまで、長めに流す（外れた約1.5秒前から、約4.5秒あと）。早く分かれば、番号を押した時点で次へ進む
+      review.stopAt = (e.tDet != null ? e.tDet : e.t) + (e.type === 'reb' ? (review.mode === 'reb' ? 3.5 : 1.5) : 1.6);
       app.seek(Math.max(0, e.t - lead), { fromReel: true });
       app.play();
-      app.tagger.beginAssign(id);
+      app.tagger.beginAssign(id, review.assignTeam(e));
+      applyZoom(e);
       BS.uiTag.renderPrompt();
     },
     next(dir) {
@@ -8789,9 +8989,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       const q = review.queue();
       if (!q.length) {
         if (dir === -1 && review.cur()) { review.show(review.id); return; }      // 戻る先がない：いまの場面をもう一度
-        const loc = review.mode === 'loc';
+        const loc = review.mode === 'loc', reb = review.mode === 'reb';
         review.stop(true);
-        BS.ui.toast(loc ? '場所を入れ終わりました 🎉（ショットのタブで、選手ごとの図が見られます）' : 'すべて確認しました 🎉', 'ok', 5000);
+        BS.ui.toast(loc ? '場所を入れ終わりました 🎉（ショットのタブで、選手ごとの図が見られます）' : reb ? 'リバウンドを数え終わりました 🎉（集計のタブで、背番号ごとの本数が見られます）' : 'すべて確認しました 🎉', 'ok', 5000);
         app.showTab(loc ? 'shot' : 'box');
         return;
       }
@@ -8838,15 +9038,28 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       }
       // 「誰？」の入力が終わった（番号が入った）か、元に戻した直後
       if (complete) { go(); return; }
-      app.tagger.beginAssign(ev.id);      // まだ足りない（場所がまだ／元に戻して選手が消えた）：番号キーがこの場面に効くようにして待つ
+      app.tagger.beginAssign(ev.id, review.assignTeam(ev));      // まだ足りない（場所がまだ／元に戻して選手が消えた）：番号キーがこの場面に効くようにして待つ
       BS.uiTag.renderPrompt();
+    },
+    /* リバウンドを、番号なしで確定する。which：'focus'＝数えるチームがとった（番号はわからない）／'other'＝相手がとった／省略＝いま番号キーが効いているチーム */
+    rebNoPlayer(which) {
+      const ev = review.cur();
+      if (!review.active || !ev || ev.type !== 'reb') return;
+      const P = app.store.project, us = P.ourTeam || 0;
+      const flow = app.tagger.state().flow;
+      const t = which === 'focus' ? us : which === 'other' ? 1 - us : (flow && flow.team != null ? flow.team : ev.team);
+      const patch = { pid: null, ok: true, est: false };
+      if (t !== ev.team) { patch.team = t; patch.off = !ev.off; }      // とったチームが推定と違えば、オフェンス／ディフェンスも入れ替える
+      app.store.updateEvent(ev.id, patch, '確認');
+      BS.uiPlayer.flash(`${P.teams[t].short} のリバウンド（番号なし）`, 'info');
+      review.advance(true);
     },
     /* 確認モード中のキー。処理したら true */
     key(e) {
       if (!review.active) return false;
       const ev = review.cur();
       const flow = app.tagger.state().flow;
-      const upd = (patch, msg) => { app.store.updateEvent(ev.id, patch, '確認'); BS.uiPlayer.flash(msg, 'info'); if (!app.tagger.state().flow) app.tagger.beginAssign(ev.id); BS.uiTag.renderPrompt(); };
+      const upd = (patch, msg) => { app.store.updateEvent(ev.id, patch, '確認'); BS.uiPlayer.flash(msg, 'info'); if (!app.tagger.state().flow) app.tagger.beginAssign(ev.id, review.assignTeam(ev)); BS.uiTag.renderPrompt(); };
       switch (e.code) {
         case 'Escape': review.stop(); return true;
         case 'ArrowRight': review.next(1); return true;
@@ -8862,6 +9075,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           return true;
         case 'Enter': case 'NumpadEnter':
           if (flow && flow.kind === 'assist') return false;   // アシストの省略はタグ入力側で処理
+          if (app.tagger.state().digits) return false;        // 番号を打っている途中の Enter は、「その番号で決める」（タグ入力側で処理）
+          // リバウンドを数えるとき：Enter ＝ 番号なしで確定（いま番号キーが効いているチームがとった。Q を押してから Enter なら、相手がとった）
+          if (review.mode === 'reb' && ev && ev.type === 'reb' && (!flow || flow.kind === 'assign')) { review.rebNoPlayer(); return true; }
           review.next(1); return true;
         default: break;
       }
@@ -8885,7 +9101,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       if (!ev) return null;
       const q = review.queue();
       const P = app.store.project;
-      return `${review.mode === 'loc' ? '📍 場所だけ入れる 残り' + q.length + '本' : '⚡ 確認 残り' + q.length + '件'}｜${BS.fmtTime(ev.t)} ${P.teams[ev.team] ? P.teams[ev.team].short : ''} ${ev.type === 'reb' ? (ev.off ? 'オフェンスリバウンド（推定）' : 'ディフェンスリバウンド（推定）') : ev.type === 'ft' ? 'FT' + (ev.made ? '成功' : '失敗') : ev.pts + 'P' + (ev.made ? '成功' : '失敗')}${ev.unsure ? '（入ったか要確認）' : ''}`;
+      if (review.mode === 'reb' && ev.type === 'reb') {
+        // 外れたのは、どちらのシュートか（オフェンスリバウンドなら、とったのもシュートしたチーム）
+        const shooter = ev.off ? ev.team : 1 - ev.team;
+        return `🏀 リバウンド 残り${q.length}場面｜${BS.fmtTime(ev.t)} ${P.teams[shooter] ? P.teams[shooter].short : ''}のシュートが外れた → とったのは？`;
+      }      return `${review.mode === 'loc' ? '📍 場所だけ入れる 残り' + q.length + '本' : '⚡ 確認 残り' + q.length + '件'}｜${BS.fmtTime(ev.t)} ${P.teams[ev.team] ? P.teams[ev.team].short : ''} ${ev.type === 'reb' ? (ev.off ? 'オフェンスリバウンド（推定）' : 'ディフェンスリバウンド（推定）') : ev.type === 'ft' ? 'FT' + (ev.made ? '成功' : '失敗') : ev.pts + 'P' + (ev.made ? '成功' : '失敗')}${ev.unsure ? '（入ったか要確認）' : ''}`;
     }
   };
 
@@ -8937,7 +9157,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   }
 
   BS.review = review;
-  BS.uiAuto = { FIG, init, render, onChange, onData, onTime, onTab, run, cancel: cancelRun, cancelMarking, setMark, drawOverlay, toScreen, state: S, reviewQueue, openEngine, remapAuto, setHalf, courtRot, rotateCourt, setReviewLoc, locQueue };
+  BS.uiAuto = { FIG, init, render, onChange, onData, onTime, onTab, run, cancel: cancelRun, cancelMarking, setMark, drawOverlay, toScreen, state: S, reviewQueue, openEngine, remapAuto, setHalf, courtRot, rotateCourt, setReviewLoc, locQueue, rebQueue, setRebZoom, rebZoomFor };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
