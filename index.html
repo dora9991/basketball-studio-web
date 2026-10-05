@@ -493,6 +493,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
 .setupfold > summary { cursor: pointer; user-select: none; font-size: 13px; color: var(--muted); }
 .setupfold[open] > summary { margin-bottom: 10px; }
 
+/* カメラの種類（ふつう／全景カメラ） */
+.camcard .camopts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+@media (max-width: 620px) { .camcard .camopts { grid-template-columns: 1fr; } }
+.camopt { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line2); border-radius: var(--radius); cursor: pointer; background: var(--panel2); }
+.camopt.on { border-color: var(--accent); background: var(--accent-soft); }
+.camopt input { margin-top: 3px; flex: none; }
+.camopt small { display: block; color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 2px; }
+
 </style>
 </head>
 <body>
@@ -1774,7 +1782,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
 /* js/render.js */
 /* バスケ分析スタジオ — サンプル試合の「合成映像」描画
    シミュレーションの軌跡から、任意の時刻 t の1コマを Canvas に描く（純粋関数的なのでシーク自由）。
-   カメラは観客席の高い位置から、ボールを追ってゆっくりパンする。 */
+   カメラは観客席の高い位置から、ボールを追ってゆっくりパンする。
+   opts.wide: 全景カメラ（360°・広角）のつもりの映像。カメラは動かず、コート全体（両方のゴール）が映りっぱなしになる。 */
 (function (root) {
   'use strict';
   const BS = root.BS;
@@ -1791,7 +1800,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return lo;
   }
 
-  function Renderer(game, canvas) {
+  function Renderer(game, canvas, opts) {
+    const WIDE = !!(opts && opts.wide);
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
     const tr = game.track;
@@ -1836,7 +1846,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     })();
 
     /* ---------- カメラ ---------- */
-    const F = 1330;
+    const F = WIDE ? Math.round(W * 0.5) : 1330;      // 全景：横幅の半分（コート全体が入る広さ）
     let cam = null;
     function setCam(camX) {
       const C = [camX, CT.W + 13.0, 8.4];
@@ -2180,7 +2190,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     /* ---------- 1コマ描画 ---------- */
     function draw(t) {
       t = BS.clamp(t, 0, game.duration);
-      setCam(camX(t));
+      const panX = camX(t);                 // ボールを追う位置（全景カメラは動かないが、審判はこの位置を追う）
+      setCam(WIDE ? CT.L / 2 : panX);
       drawEnvironment();
       const map = slotMapAt(t);
       const ball = ballAt(t);
@@ -2190,7 +2201,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       drawHoop(0, list, scSide === 0 ? sc.tau : -1);
       drawHoop(1, list, scSide === 1 ? sc.tau : -1);
       // 審判（ボールを追う）
-      const refX1 = BS.clamp(cam.x + 3.5, 2, CT.L - 2), refX2 = BS.clamp(cam.x - 5.5, 1.5, CT.L - 1.5);
+      const refX1 = BS.clamp(panX + 3.5, 2, CT.L - 2), refX2 = BS.clamp(panX - 5.5, 1.5, CT.L - 1.5);
       [[refX1, -0.55, 0], [refX2, -0.35, 1]].forEach(([x, y, k]) => {
         list.push({ y, draw: () => drawPerson({ x: x + Math.sin(t * 0.8 + k) * 0.4, y, z: 0, h: 1.76, speed: 1.2, t, main: '#2a2a2a', trim: '#cccccc', text: '#fff', skin: SKINS[k], hair: HAIRS[0], shoe: '#111', no: '' }) });
       });
@@ -2244,13 +2255,19 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       // カメラがそのゴール側の端まで寄っていて、ボールがゴールから離れている時刻（枠の中に選手やボールが入りにくい）
       let t = -1;
       for (let x = 5; x < game.duration - 5; x += 0.5) {
-        if (Math.abs(camX(x) - edge) > 0.02 || Math.abs(camX(x + 0.5) - edge) > 0.02) continue;
+        if (!WIDE && (Math.abs(camX(x) - edge) > 0.02 || Math.abs(camX(x + 0.5) - edge) > 0.02)) continue;
         const b = ballAt(x);
         if (Math.abs(b.x - rimX) < 4 || b.z > 2.2) continue;
+        if (WIDE) {
+          // 全景カメラ：どの時刻でもゴールは映っている。板やリングに選手が重なっていないコマを選ぶ
+          let busy = false;
+          for (let k = 0; k < 10 && !busy; k++) { const q = slotPos(k, x); if (Math.hypot(q.x - rimX, q.y - 7.5) < 3.2) busy = true; }
+          if (busy) continue;
+        }
         t = x; break;
       }
       if (t < 0) return null;
-      setCam(camX(t));
+      setCam(WIDE ? CT.L / 2 : camX(t));
       const pts = [[boardX, 6.6, 2.9], [boardX, 8.4, 2.9], [boardX, 8.4, 3.95], [boardX, 6.6, 3.95]].map((p) => proj(p[0], p[1], p[2]));
       const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
       const box = { x: Math.min.apply(null, xs) - 4, y: Math.min.apply(null, ys) - 4, w: Math.max.apply(null, xs) - Math.min.apply(null, xs) + 8, h: Math.max.apply(null, ys) - Math.min.apply(null, ys) + 8 };
@@ -4369,6 +4386,25 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       return { init, update, status, revert, drop, state: st };
     }
 
+    /* ---------- 固定カメラ用のゴール ----------
+       360°カメラ・広角カメラなど、コート全体が映りっぱなしでカメラが動かない映像では、ゴールは動かない。
+       追いかけずに、指定した場所をそのまま見張る（バックボードの模様が小さくて追跡が不安定になることもない）。
+       リングの色での確認（verifyRim）は、そのまま使う。リングが選手に隠れたコマは、そのコマだけ使わない。 */
+    function createFixedTracker(mark, srcW, srcH) {
+      const st = { id: mark.id, frame: 0, tracked: true, score: 1, lost: 0, everSeen: true, fixed: true };
+      let first = true;
+      function status() {
+        const rim = { cx: mark.rim.cx, cy: mark.rim.cy, w: mark.rim.w };
+        return {
+          id: mark.id, tracked: true, acquired: first, score: 1, scale: 1, fixed: true,
+          box: { x: mark.box.x, y: mark.box.y, w: mark.box.w, h: mark.box.h }, rim,
+          inFrame: rim.cx > 0 && rim.cx < srcW && rim.cy > 0 && rim.cy < srcH
+        };
+      }
+      function update() { st.frame++; const s = status(); first = false; return s; }
+      return { init() {}, update, status, revert() {}, drop() {}, state: st };
+    }
+
     /* ---------- リングの色での確認と、位置の微調整 ----------
        バックボードの模様（白黒）だけでは、床の反射などに誤って張り付くことがある。
        リングは赤〜オレンジの輪なので、「リングのまわりの赤みの模様」を、指定したときのものと照合する。
@@ -4824,7 +4860,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
          const result = an.finish()
        フレームの作り方は環境ごとに違う（node: 全画面から切り出し／ブラウザ: 小さな canvas に描いて読む）ので、ここでは受け取るだけ。 */
     function createAnalyzer(cfg) {
-      const trackers = cfg.hoops.map((m, i) => createHoopTracker(m, cfg.srcW, cfg.srcH, i));
+      const fixed = !!cfg.fixed;       // true: カメラが動かない（全景カメラ）。ゴールを追わず、指定した場所を見張る
+      const trackers = cfg.hoops.map((m, i) => (fixed ? createFixedTracker(m, cfg.srcW, cfg.srcH) : createHoopTracker(m, cfg.srcW, cfg.srcH, i)));
       const rims = cfg.hoops.map(() => createRimChecker());
       const rimState = cfg.hoops.map(() => ({ dx: 0, dy: 0, low: 0, score: null }));
       const watchers = cfg.hoops.map((m) => createHoopWatcher(m.id));
@@ -4852,8 +4889,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         if (c.score == null) return s;                       // 画面の端などで確認できない：そのまま使う
         if (s.acquired && c.score < TH_RIM_ACQ) { tr.revert(); return tr.status(); }
         if (c.score < TH_RIM_LOW) {
-          // リングが見当たらないコマは使わない（追跡そのものは続ける。約1秒続いたら追跡をやめる）
-          if (++rs.low >= RIM_LOW_FRAMES) { tr.drop(); rs.low = 0; return tr.status(); }
+          // リングが見当たらないコマは使わない（追跡そのものは続ける。約1秒続いたら追跡をやめる。固定カメラは追跡しないので、やめない：
+          // やめると、そのコマだけ「見えている」扱いになってしまう）
+          if (!fixed && ++rs.low >= RIM_LOW_FRAMES) { tr.drop(); rs.low = 0; return tr.status(); }
           s.tracked = false; s.rimScore = c.score;
           return s;
         }
@@ -4867,16 +4905,16 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       function process(f) {
         frames++;
         let shift = null;
-        if (prevQ && prevQ.w === f.quarter.w) {
+        if (!fixed && prevQ && prevQ.w === f.quarter.w) {
           // 画面全体が前のコマからどれだけ動いたか（＝ゴールも同じだけ動いて見える）。1/4 の解像度で測るので 4 倍する
           const s = V.globalShift(prevQ.data, f.quarter.data, f.quarter.w, f.quarter.h, 12);
           shift = { dx: s.dx * 4, dy: s.dy * 4, err: s.err };
         }
-        prevQ = f.quarter;
+        if (!fixed) prevQ = f.quarter;
         const status = [];
         const fresh = [];
         trackers.forEach((tr, i) => {
-          let s = tr.update(f.gray.data, f.gray.w, f.gray.h, f.quarter, shift);
+          let s = fixed ? tr.update() : tr.update(f.gray.data, f.gray.w, f.gray.h, f.quarter, shift);
           if (s.tracked && s.inFrame) s = verifyRim(i, s, f);
           status.push(s);
           if (!s.tracked || !s.inFrame) return;
@@ -4943,13 +4981,31 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
        makeCanvas(w, h) は canvas（Worker では OffscreenCanvas）を作る関数。
        作業用の画像は幅 FW_MAX 以下に縮める。そこから先は node での検証（real-run.cjs）と同じ計算。 */
     const FW_MAX = 1280;
+    const FW_MAX_PIXELS = 40e6;        // 固定カメラで元の大きさのまま持つ作業画像の上限（8K の 7680×4320 まで）
+    const RIM_WORK = 40;               // 固定カメラ：作業画像の上でリングがこの幅（画素）以上になる範囲で、できるだけ縮める
     function createFrameAnalyzer(cfg, makeCanvas) {
       const an = createAnalyzer(cfg);
-      const kf = Math.max(1, cfg.srcW / FW_MAX);                // 元の画素 → 作業用の画素
+      const fixed = !!cfg.fixed;                                // カメラが動かない映像（全景カメラ）：ゴールを追わないので、全体のグレー画像などは作らない
+      /* 元の画素 → 作業用の画素（kf）。ふつうは横 1280 に縮める。
+         全景カメラでは、ゴールが小さく映る（リング幅 30 画素ほど）ので、縮めるとリングやボールがつぶれる。
+         リングが作業画像の上で RIM_WORK 画素になる範囲までしか縮めない（小さいゴールなら、元の大きさのまま）。
+         Safari のエンジンは、復号した VideoFrame の「一部だけ切り出して描く」指定を無視するので、
+         切り出しではなく「全体を1回描いて、必要な領域だけ getImageData で読む」方法にしてある（Chrome でも、これが速い）。 */
+      let kf = Math.max(1, cfg.srcW / FW_MAX);
+      if (fixed) {
+        const minRim = Math.min.apply(null, cfg.hoops.map((m) => m.rim.w));
+        kf = Math.min(kf, Math.max(1, minRim / RIM_WORK));
+        kf = Math.max(kf, Math.sqrt(cfg.srcW * cfg.srcH / FW_MAX_PIXELS));
+        kf = Math.max(1, kf);
+      }
       const fw = Math.round(cfg.srcW / kf), fh = Math.round(cfg.srcH / kf);
       const ah = Math.round(AW * cfg.srcH / cfg.srcW);
-      const cF = makeCanvas(fw, fh), gF = cF.getContext('2d', { willReadFrequently: true });
-      const cA = makeCanvas(AW, ah), gA = cA.getContext('2d', { willReadFrequently: true });
+      /* 作業画像の canvas。固定カメラで大きな映像のときは、GPU の canvas のほうが速い（描くのが GPU の中で済み、読むのは必要な領域だけ）。
+         Worker の中で、新しい復号フレームごとにかかる時間：4K Chrome 38→11 ミリ秒・5.7K 70→16、Safari 系 4K 45→29・5.7K 88→54（実測）。
+         ふつうのカメラ（縮めた作業画像の全体を毎コマ読む）は、CPU の canvas のまま。 */
+      const gpu = cfg.gpu != null ? !!cfg.gpu : fixed && fw * fh > 1.5e6;      // cfg.gpu: 検証用（true/false で強制）。2560×1440 でも Chrome 40→21 秒・Safari 系 46→32 秒（120 秒の映像）
+      const cF = makeCanvas(fw, fh), gF = cF.getContext('2d', gpu ? {} : { willReadFrequently: true });
+      const cA = fixed ? null : makeCanvas(AW, ah), gA = cA ? cA.getContext('2d', { willReadFrequently: true }) : null;
       if (kf > 2) gF.imageSmoothingQuality = 'medium';
       const bufs = {};          // 切り出しの出力先（大きさごとに使い回す）
       let gray = null;
@@ -4960,6 +5016,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           if (rot === 180) gF.drawImage(source, -fw / 2, -fh / 2, fw, fh); else gF.drawImage(source, -fh / 2, -fw / 2, fh, fw);
           gF.restore();
         } else gF.drawImage(source, 0, 0, fw, fh);
+        if (fixed) return null;
         gA.drawImage(cF, 0, 0, AW, ah);
         gray = { data: V.toGray(gA.getImageData(0, 0, AW, ah).data, AW, ah, 'rgba'), w: AW, h: ah };
         return gray;
@@ -4975,16 +5032,17 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         return V.extractPatch(d, x1 - x0, y1 - y0, px - x0, py - y0, s, outSize, 'rgba', patch);
       }
       /* いま読み込んである画像（load 済み）からゴールのテンプレートを作る */
-      function initHoop(i) { an.initHoop(i, gray.data, gray.w, gray.h, getPatch); }
+      function initHoop(i) { an.initHoop(i, gray ? gray.data : null, gray ? gray.w : 0, gray ? gray.h : 0, getPatch); }
       function frame(t, source, rot) {
         const g = load(source, rot);
+        if (fixed) return an.process({ t, gray: null, quarter: null, getPatch });
         const half = V.shrinkGray(g.data, g.w, g.h, 2), quarter = V.shrinkGray(half.data, half.w, half.h, 2);
         return an.process({ t, gray: g, quarter, getPatch });
       }
-      return { load, initHoop, frame, finish: an.finish, analyzer: an, canvas: cF, width: fw, height: fh };
+      return { load, initHoop, frame, finish: an.finish, analyzer: an, canvas: cF, width: fw, height: fh, fixed, kf };
     }
 
-    BS.auto = { AW, WC, PS, PCY, RV, createHoopTracker, createRimChecker, createHoopWatcher, createShotDetector, createAnalyzer, createFrameAnalyzer, toEvents, ballLike, prepFrame };
+    BS.auto = { AW, WC, PS, PCY, RV, createHoopTracker, createFixedTracker, createRimChecker, createHoopWatcher, createShotDetector, createAnalyzer, createFrameAnalyzer, toEvents, ballLike, prepFrame };
   }
   mod(root);
   (root.BS.src = root.BS.src || {}).auto = mod;   // Worker に同じコードを渡すため
@@ -5334,7 +5392,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
 
         // 本番：頭から順に
         const t0 = opts.t0 || 0, t1 = opts.t1 != null ? opts.t1 : Infinity;
-        let lastT = -1, n = 0, lastPost = 0, skip = opts.phase || 0;
+        let lastT = -1, n = 0, lastPost = 0, skip = opts.phase || 0, spent = 0;      // spent: 1コマの解析（fa.frame）にかかった時間の合計（ミリ秒）。デコードにかかった時間との切り分け用
         if (opts.debug && !dbg) dbg = [];
         const started = now();
         await decodeFrom(track, reader, config, MP4.keyBefore(track, t0), (f, t) => {
@@ -5343,7 +5401,9 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           if (skip > 0) { skip--; return true; }
           if (t - lastT < MIN_STEP) return true;
           lastT = t; n++;
+          const tf = now();
           const live = fa.frame(t, f, rot);
+          spent += now() - tf;
           record(t, live);
           const w = now();
           if (live.events.length || w - lastPost > 200) {
@@ -5358,6 +5418,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         if (cancelled) throw Object.assign(new Error('中止しました'), { code: 'cancelled' });
         const res = fa.finish();
         res.elapsed = (now() - started) / 1000;
+        res.analyseSec = spent / 1000;
         res.mode = 'decode';
         if (dbg) res.log = dbg;
         return res;
@@ -5576,11 +5637,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   'use strict';
   const BS = root.BS;
 
-  function createSynthMedia(game) {
+  /* opts.wide: 全景カメラのつもりの合成映像（2560×1440。カメラは動かず、コート全体が映りっぱなし） */
+  function createSynthMedia(game, opts) {
+    const wide = !!(opts && opts.wide);
     const canvas = document.createElement('canvas');
-    canvas.width = 1280; canvas.height = 720;
+    const ww = wide ? Math.max(640, Math.round(((opts && opts.width) || 2560) / 2) * 2) : 1280;      // 全景サンプルの横幅（検証用に変えられる。既定 2560）
+    canvas.width = ww; canvas.height = Math.round(ww * 9 / 16 / 2) * 2;
     canvas.className = 'media-el';
-    const rd = BS.Renderer(game, canvas);
+    const rd = BS.Renderer(game, canvas, { wide });
     const bus = BS.emitter();
     let t = 0, playing = false, rate = 1, raf = 0, last = 0;
     function tick(nowMs) {
@@ -5595,7 +5659,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     }
     rd.draw(0);
     const api = {
-      kind: 'synth', el: canvas, game, renderer: rd,
+      kind: 'synth', el: canvas, game, renderer: rd, wide,
       get duration() { return game.duration; },
       get time() { return t; },
       get paused() { return !playing; },
@@ -6843,8 +6907,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         else BS.ui.modal({ title: 'リバウンドの一覧', body: h('div', null, h('p', { class: 'note' }, 'コピーできなかったので、ここから選んでコピーしてください。'), h('textarea', { readonly: true, style: { width: '100%', minHeight: '150px', fontFamily: 'inherit' } }, text)), buttons: [{ label: '閉じる', cls: 'primary' }] });
       } }, '📋 コピー'));
     if (foot.children.length) box.append(foot);
-    if (R.pending) box.append(h('p', { class: 'note', style: { margin: '6px 0 0' } }, `まだ見ていない場面が ${R.pending} あります。どちらのチームがとったかも、まだ推定です（数えた分だけが、上の表に入ります）。`));
-    if (M.events.some((e) => e.auto)) box.append(h('p', { class: 'note', style: { margin: '4px 0 0' } }, '数えられるのは、ゴールが映っていた間のシュートのあとのリバウンドだけです。映っていない間の分は、「タグ付け」タブで足せます（D → 背番号）。'));
+    if (R.pending) {
+      // 自動で見つけただけで、まだ人が見ていない場面：どちらのチームがとったかも推定（外れた後に、同じゴールで続けて打てば攻めていた側、そうでなければ守っていた側）
+      const mineEst = M.events.filter((e) => e.type === 'reb' && e.auto && !e.ok && e.team === tm).length;
+      box.append(h('p', { class: 'note', id: (opts.id || 'rebCard') + 'Est', style: { margin: '6px 0 0' } },
+        `自動で見つけた、まだ番号を入れていない場面：${R.pending}（推定：${T.short} ${mineEst}・${P.teams[1 - tm].short} ${R.pending - mineEst}）。どちらがとったかも推定です。見て確かめた分だけが、上の表に入ります。`));
+    }
+    if (M.events.some((e) => e.auto)) box.append(h('p', { class: 'note', style: { margin: '4px 0 0' } },
+      P.auto && P.auto.fixed ? '全景カメラなので、すべてのシュートのあとを調べています（リングが選手に隠れた一瞬は除く）。見落としがあれば、「タグ付け」タブで足せます（D → 背番号）。'
+        : '数えられるのは、ゴールが映っていた間のシュートのあとのリバウンドだけです。映っていない間の分は、「タグ付け」タブで足せます（D → 背番号）。'));
     return box;
   }
 
@@ -8140,6 +8211,14 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
         li('ゴールの指定は、板の前に選手やボールが', b('重なっていない・ぶれていない'), 'コマで。リングの線は、輪の端から端まで', b('ぴったり'), '。指定のあとに出る小さな絵で、ずれていないか確かめられます。'),
         li('ゴールとチームの対応が逆だったら、① の「このゴールで得点するチーム」を選び直すだけで直ります（解析のやり直しは不要）。'),
         li('アシスト・ターンオーバー・ファウルなど、映像から自動では拾えないプレーは「タグ付け」タブで足します（キー操作は ⌨️ ボタン）。')),
+      h('h4', null, '360°カメラ・180°カメラ・広角カメラで、コート全体を撮った映像のとき（全景カメラ）'),
+      h('ul', null,
+        li('⚡自動解析の ① にある「📹 カメラの種類」で ', b('🌐 全景カメラ'), ' を選びます。カメラが動かない映像では、ゴールを追いかけず、指定した場所をずっと見張ります。ゴールが映らない時間がないので、', b('すべてのシュートとリバウンドの場面'), 'を調べられます（ふつうのカメラでは、ゴールが映っていた時間の分だけ）。'),
+        li('ゴールは小さく映ります。指定のときは、まず', b('ゴールのあたりを1回クリック'), '（そこが拡大されます）→ 板を囲む → リングをなぞる、の順です。両方のゴールを、同じコマで指定してかまいません。'),
+        li('360°カメラの動画は、カメラのアプリで ', b('全天球（正距円筒・横:縦＝2:1）の MP4'), ' に書き出したものを開いてください。展開した横長の絵のまま調べます（ゆがみの補正はしません）。書き出すときは、コートが映像の左右の端で切れない向きにしてください。カメラ専用のファイル（.insv など）や、2つの魚眼レンズの絵がそのまま並んだ動画は、先にカメラのアプリで書き出す必要があります。'),
+        li('目安：ゴールのリングが画面上で ', b('25画素以上'), '（映像の幅の約1%）あると安心です（合成映像では14画素でも検出できましたが、本物の映像は画質が下がるので、余裕を見た値です）。4K（横3840）以上の映像をおすすめします。'),
+        li('背番号は、いまのところ自動では読めません。リバウンドの本数は、外れた場面ごとに「とった選手の背番号キー」を押して数えます（全景カメラでは、ゴールのまわりが大きく拡大されて再生されます）。'),
+        li('本物の映像がなくても、「全景カメラのサンプル（合成映像）で試す」で、操作の流れを確かめられます。')),
       h('h4', null, '解析した結果を保存する・あとで開く'),
       h('ul', null,
         li('タグとゴールの指定は、このブラウザに自動で保存されます。同じ動画を開き直すと元に戻ります。'),
@@ -8241,7 +8320,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   const V = BS.vision, A = BS.auto;
 
   let app = null;
-  const S = { marking: null, running: null, lastResult: null, live: null, debug: false, lastLog: null, thumbs: [null, null], pid: null, openHow: null, openHalf: false, openSetup: false };
+  const S = { marking: null, running: null, lastResult: null, live: null, debug: false, gpu: undefined, lastLog: null, thumbs: [null, null], pid: null, openHow: null, openHalf: false, openSetup: false };
   const HOOP_LABEL = ['ゴールA', 'ゴールB'];
 
   function init(a) {
@@ -8295,6 +8374,43 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     d.querySelector('summary').addEventListener('click', () => { S.openHow = !d.open; });
     return d;
   }
+  /* ---------- カメラの種類：ふつう／全景カメラ ----------
+     全景カメラ（360°・180°・広角）：カメラは動かず、コート全体（両方のゴール）が映りっぱなし。
+     ゴールを追いかけずに指定した場所を見張るので、ゴールが映っていない時間がなく、すべてのシュートを調べられる。 */
+  function openWideSample() {
+    const go = () => { app.stopDemo('sample'); app.openSample({ wide: true, at: 6 }); app.showTab('auto'); BS.ui.toast('全景カメラのサンプル（合成映像）を開きました。ゴールは指定済みです。「自動解析を始める」を押してください', 'ok', 7000); };
+    const P = app.store.project;
+    if (P.source && P.source.kind === 'video') {
+      BS.ui.modal({
+        title: '全景カメラのサンプルを開きますか？', body: h('p', null, 'サンプルを開くと、いまの試合から切り替わります。いまの試合のタグはこのブラウザに保存されています。あとで同じ動画を「🎬 動画を開く」で開くと、続きから作業できます。'),
+        buttons: [{ label: 'キャンセル' }, { label: 'サンプルを開く', cls: 'primary', onClick: () => { app.store.saveNow(); go(); } }]
+      });
+    } else go();
+  }
+  function cameraCard(c) {
+    const fixed = !!c.fixed;
+    const asp = app.media.width / app.media.height;
+    const pick = (v) => { if (S.running || !!c.fixed === v) return; c.fixed = v; app.store.updateMeta({ auto: c }); render(); drawOverlay(); };
+    const opt = (v, id, title, desc) => h('label', { class: 'camopt' + (fixed === v ? ' on' : ''), id },
+      h('input', { type: 'radio', name: 'camKind', checked: fixed === v, disabled: !!S.running, onchange: () => pick(v) }),
+      h('span', null, h('b', null, title), h('small', null, desc)));
+    const card = h('div', { class: 'card camcard' },
+      h('b', null, '📹 カメラの種類'),
+      h('div', { class: 'camopts' },
+        opt(false, 'camNormal', 'ふつうのカメラ', '撮る人がカメラを動かした試合。ゴールは画面に出たり消えたりします（自動で追いかけます）'),
+        opt(true, 'camWide', '🌐 全景カメラ', '360°・180°・広角など。カメラは固定で、コート全体（両方のゴール）が映りっぱなし。ゴールを追わず、指定した場所を見張ります')));
+    if (fixed) {
+      card.append(h('p', { class: 'note', style: { margin: '6px 0 0' } }, '両方のゴールを同じ場面（コマ）で指定してかまいません。ゴールは小さく映るので、指定するときは自動で拡大します。ゴールが映らない時間がないので、すべてのシュートを調べられます（選手でリングが隠れた一瞬を除く）。'));
+      if (asp >= 1.9) card.append(h('p', { class: 'note', style: { margin: '4px 0 0' } }, `この映像は横長（${asp.toFixed(1)}:1）です。360°カメラの動画（全天球を展開した2:1の MP4）は、展開した絵のまま調べます。ゆがみの補正はしません。`));
+      if (c.last && c.last.fixed === false && c.last.shots != null) card.append(h('p', { class: 'note', style: { margin: '4px 0 0', color: 'var(--warn)' } }, 'カメラの種類を変えました。前回の結果は「ふつうのカメラ」で解析したものです。もう一度解析してください。'));
+    } else {
+      if (asp >= 1.9) card.append(h('p', { class: 'note', id: 'camHint', style: { margin: '6px 0 0', color: 'var(--warn)' } }, `横長（${asp.toFixed(1)}:1）の映像です。360°カメラなどで、コート全体が映りっぱなしの映像なら、上の「🌐 全景カメラ」を選んでください。`));
+      if (c.last && c.last.fixed === true && c.last.shots != null) card.append(h('p', { class: 'note', style: { margin: '4px 0 0', color: 'var(--warn)' } }, 'カメラの種類を変えました。前回の結果は「全景カメラ」で解析したものです。もう一度解析してください。'));
+    }
+    card.append(h('p', { class: 'note', style: { margin: '6px 0 0' } }, h('a', { href: '#', id: 'wideSample', onclick: (e) => { e.preventDefault(); openWideSample(); } }, '全景カメラのサンプル（合成映像）で試す'), '　※ 本物の全景映像がなくても、操作の流れを確かめられます'));
+    return card;
+  }
+
   /* 指定したゴールの小さな絵（確認用）。その場のコマから切り出すだけで、保存はしない */
   function makeThumb(i) {
     const m = cfg().hoops[i];
@@ -8352,13 +8468,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const secGoal = [], secRun = [], secRes = [];
 
     // ① ゴール
-    secGoal.push(h('h3', null, '① ゴールを教える ', h('small', null, 'この試合で使う2つのゴール。最初の1回だけ。カメラが動いても自動で追いかけます')));
+    secGoal.push(h('h3', null, '① ゴールを教える ', h('small', null, c.fixed ? 'この試合で使う2つのゴール。最初の1回だけ。カメラは動かないので、指定した場所を見張ります' : 'この試合で使う2つのゴール。最初の1回だけ。カメラが動いても自動で追いかけます')));
+    secGoal.push(cameraCard(c));
     if (S.marking) {
       secGoal.push(h('div', { class: 'card markcard', style: { borderColor: 'var(--warn)', marginBottom: '8px' } },
         h('b', null, `${HOOP_LABEL[S.marking.i]} を指定中：`),
-        S.marking.step === 0 ? ' ① 映像の上で、バックボード（板）全体をドラッグで囲んでください。' : ' ② 次に、リング（輪）の左端から右端まで、ぴったりなぞってください（ここがずれると精度が落ちます）。',
+        S.marking.step === -1 ? ' ⓪ まず、映像の上で、ゴールのあたりを1回クリックしてください（そこを拡大して見せます）。' : S.marking.step === 0 ? ' ① 映像の上で、バックボード（板）全体をドラッグで囲んでください。' : ' ② 次に、リング（輪）の左端から右端まで、ぴったりなぞってください（ここがずれると精度が落ちます）。',
         h('div', { class: 'row', style: { marginTop: '6px' } },
-          S.marking.step === 1 ? h('button', { class: 'btn small', onclick: () => { S.marking.step = 0; S.marking.box = null; S.marking.view = null; render(); drawOverlay(); } }, '囲み直す') : null,
+          S.marking.step === 1 ? h('button', { class: 'btn small', onclick: () => { S.marking.step = 0; S.marking.box = null; S.marking.view = S.marking.pre || null; render(); drawOverlay(); } }, '囲み直す') : null,
+          S.marking.step === 0 && S.marking.pre ? h('button', { class: 'btn small', onclick: () => { S.marking.step = -1; S.marking.box = null; S.marking.view = null; S.marking.pre = null; render(); drawOverlay(); } }, 'ゴールの位置を選び直す') : null,
           h('button', { class: 'btn small', onclick: () => cancelMarking() }, 'やめる'),
           h('span', { class: 'note' }, 'Esc でもやめられます'))));
     }
@@ -8457,7 +8575,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
           h('b', null, '自動でできること・できないこと'), h('br'),
           '○ 得点・シュート失敗・どちらのゴールか・外れた後のリバウンドの種類（推定）', h('br'),
           '△ 3点／フリースロー／笛の後で無効になった得点は区別できません（確認モードで直します。3点かどうかは、コート図で場所をクリックすると決まります）', h('br'),
-          '× ゴールが画面に映っていないシュートは検出できません。「誰が」「どこから」は、確認モードで番号キーとコート図のクリックで入れてください'));
+          c.fixed ? '△ リングが選手に隠れた一瞬・カメラが動いたあとのシュートは検出できません。「誰が」「どこから」は、確認モードで番号キーとコート図のクリックで入れてください（背番号は、いまのところ自動では読めません）'
+            : '× ゴールが画面に映っていないシュートは検出できません。「誰が」「どこから」は、確認モードで番号キーとコート図のクリックで入れてください'));
     }
 
     if (autos.length && !S.running && !S.marking) {
@@ -8475,7 +8594,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   function startMarking(i) {
     S.openSetup = true;
     app.pause();
-    S.marking = { i, step: 0, box: null, drag: null };
+    S.marking = { i, step: cfg().fixed ? -1 : 0, box: null, drag: null, pre: null };      // 全景カメラ：ゴールが小さいので、まずクリックで拡大してから囲む（step -1）
     setOverlayActive(true);
     render(); drawOverlay();
     const mc = pane() && pane().querySelector('.markcard');
@@ -8510,6 +8629,15 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const vh = vw * r.height / r.width;
     return { x: box.x + box.w / 2 - vw / 2, y: box.y + box.h * 0.8 - vh / 2, w: vw, h: vh };
   }
+  /* 全景カメラ：クリックした場所のまわりを、映像の横幅の 1/7 ほどの範囲で拡大して見せる（ゴールが画面上で数画素のこともあるため）。
+     リングを押した人も、板を押した人も、板が見切れないように、クリックより少し上を中心にする（板はリングの上にある） */
+  function viewAround(pt) {
+    const r = $('#autoOverlay').getBoundingClientRect();
+    const W = app.media.width, H = app.media.height;
+    const vw = Math.min(W, Math.max(200, W / 7));
+    const vh = Math.min(H, vw * r.height / r.width);
+    return { x: BS.clamp(pt.x - vw / 2, 0, Math.max(0, W - vw)), y: BS.clamp(pt.y - vh * 0.6, 0, Math.max(0, H - vh)), w: vw, h: vh };
+  }
   function onDown(ev) { if (!S.marking) return; ev.preventDefault(); const p = toSrc(ev); S.marking.drag = { a: p, b: p }; $('#autoOverlay').setPointerCapture(ev.pointerId); drawOverlay(); }
   function onMove(ev) { if (!S.marking || !S.marking.drag) return; S.marking.drag.b = toSrc(ev); drawOverlay(); }
   function onUp(ev) {
@@ -8518,9 +8646,11 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     mk.drag.b = toSrc(ev);
     const { a, b } = mk.drag;
     mk.drag = null;
+    if (mk.step === -1) { mk.view = mk.pre = viewAround(b); mk.step = 0; render(); drawOverlay(); return; }
     if (mk.step === 0) {
       const box = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
-      if (box.w < 16 || box.h < 12) { BS.ui.toast('小さすぎます。バックボード全体を囲んでください', 'err'); drawOverlay(); return; }
+      const small = cfg().fixed ? 8 : 12;      // 全景カメラのゴールは小さい
+      if (box.w < small + 4 || box.h < small) { BS.ui.toast('小さすぎます。バックボード全体を囲んでください', 'err'); drawOverlay(); return; }
       mk.box = box; mk.step = 1; mk.view = zoomFor(box); mk.t = app.time();
     } else {
       const w = Math.hypot(a.x - b.x, a.y - b.y);
@@ -8532,7 +8662,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       // 気づきやすい失敗を、その場で知らせる
       const far = rim.cx < mk.box.x - mk.box.w * 0.5 || rim.cx > mk.box.x + mk.box.w * 1.5 || rim.cy < mk.box.y - mk.box.h * 0.5 || rim.cy > mk.box.y + mk.box.h * 2;
       if (far) BS.ui.toast('リングの線が、囲んだバックボードから離れています。同じゴールのリングをなぞり直してください（「指定し直す」）', 'warn', 8000);
-      else if (w / app.media.width < 0.0125) BS.ui.toast(`${HOOP_LABEL[mk.i]} を指定しました。ただしリングが小さく映っています。もっと大きく映っている場面があれば、そこで指定し直すと精度が上がります`, 'warn', 8000);
+      else if (cfg().fixed ? w < 14 : w / app.media.width < 0.0125) BS.ui.toast(`${HOOP_LABEL[mk.i]} を指定しました。ただしリングが小さく映っています。もっと大きく映っている場面があれば、そこで指定し直すと精度が上がります`, 'warn', 8000);
       else BS.ui.toast(`${HOOP_LABEL[mk.i]} を指定しました${cfg().hoops.filter(Boolean).length >= 2 ? '。② の「自動解析を始める」を押してください' : '。もう1つのゴールも、映っている場面で同じように指定します'}`, 'ok', 5000);
     }
     render(); drawOverlay();
@@ -8578,7 +8708,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
       // いま何をすればよいかを、映像の上の帯に出す
       g.fillStyle = 'rgba(0,0,0,0.66)'; g.fillRect(0, 0, r.width, 28);
       g.fillStyle = '#fde047'; g.font = 'bold 13.5px sans-serif';
-      g.fillText(mk.step === 0 ? `${HOOP_LABEL[mk.i]}　① バックボード（板）全体を、ドラッグで囲んでください` : `${HOOP_LABEL[mk.i]}　② ${mk.view ? '🔍 拡大表示中：' : ''}リング（輪）の左端 → 右端 を、ぴったりドラッグ`, 10, 19);
+      g.fillText(mk.step === -1 ? `${HOOP_LABEL[mk.i]}　⓪ ゴールのあたりを、1回クリック（そこを拡大します）` : mk.step === 0 ? `${HOOP_LABEL[mk.i]}　① ${mk.view ? '🔍 拡大表示中：' : ''}バックボード（板）全体を、ドラッグで囲んでください` : `${HOOP_LABEL[mk.i]}　② ${mk.view ? '🔍 拡大表示中：' : ''}リング（輪）の左端 → 右端 を、ぴったりドラッグ`, 10, 19);
       return;
     }
     // 解析中：いま調べているコマと、追跡している枠・ボール候補（自動解析タブを見ているときだけ。ほかのタブでは映像をふさがない）
@@ -8597,7 +8727,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     }
     // 指定済みのゴール（指定したコマの近くでだけ表示）
     if (app.tab === 'auto') {
-      cfg().hoops.forEach((m, i) => { if (m && Math.abs(app.time() - m.t) < 0.2) { rect(m.box, i ? '#e879f9' : '#22c55e', HOOP_LABEL[i]); rimLine(m.rim, '#fde047'); } });
+      cfg().hoops.forEach((m, i) => { if (m && (cfg().fixed || Math.abs(app.time() - m.t) < 0.2)) { rect(m.box, i ? '#e879f9' : '#22c55e', HOOP_LABEL[i]); rimLine(m.rim, '#fde047'); } });
     }
   }
 
@@ -8666,7 +8796,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const cv = document.createElement('canvas');
     cv.width = media.width; cv.height = media.height;
     cv.getContext('2d', { willReadFrequently: true });
-    const rd = BS.Renderer(media.game, cv);
+    const rd = BS.Renderer(media.game, cv, { wide: media.wide });
     const shot = (t) => { rd.draw(t); return createImageBitmap(cv); };
     for (let k = 0; k < marks.length; k++) {
       const bm = await shot(marks[k].t);
@@ -8774,7 +8904,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     };
     let eng = null, res = null;
     try {
-      eng = st.eng = await openEngine({ srcW: media.width, srcH: media.height, hoops: marks.map((m) => ({ id: m.id, box: m.box, rim: m.rim })), debug: !!S.debug },      // S.debug: 検証用（コマごとのログを S.lastLog に残す）
+      eng = st.eng = await openEngine({ srcW: media.width, srcH: media.height, fixed: !!c.fixed, gpu: S.gpu, hoops: marks.map((m) => ({ id: m.id, box: m.box, rim: m.rim })), debug: !!S.debug },      // S.debug: 検証用（コマごとのログを S.lastLog に残す）
         (m) => { if (m.ev === 'progress') onLive(m.t, m.live, m.preview); else if (m.ev === 'info') st.info = m; });
       if (media.kind === 'synth') {
         st.mode = 'push';
@@ -8823,7 +8953,7 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const mapMask = (m) => { let o = 0; idx.forEach((hi, i) => { if (m & (1 << i)) o |= 1 << hi; }); return o; };
     const made = res.shots.filter((s) => s.made).length;
     c.last = {
-      at: Date.now(), mode: res.mode, frames: res.frames, wall: Math.round(res.wall), dur: +app.duration().toFixed(1), until: +Math.min(until, app.duration()).toFixed(1),
+      at: Date.now(), fixed: !!c.fixed, mode: res.mode, frames: res.frames, wall: Math.round(res.wall), ana: res.analyseSec != null ? Math.round(res.analyseSec) : null, dur: +app.duration().toFixed(1), until: +Math.min(until, app.duration()).toFixed(1),
       shots: res.shots.length, made, gaps: res.gaps || 0,
       spans: (res.spans || []).filter((sp) => sp[2]).map((sp) => [+sp[0].toFixed(1), +sp[1].toFixed(1), mapMask(sp[2])])
     };
@@ -8833,6 +8963,12 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     BS.ui.toast(`自動解析が終わりました：シュート ${res.shots.length} 本（成功 ${made}）を検出`, 'ok', 6000);
   }
 
+  /* 全景カメラなのに、ゴールを見張れた時間が全体の 85% に届かない（＝指定のずれ・カメラの移動を疑う） */
+  function fixedLow(last) {
+    const full = last.dur || app.duration() || 1;
+    const dur = last.until && last.until < full - 1 ? last.until : full;
+    return [0, 1].filter((i) => cfg().hoops[i]).some((i) => last.spans.filter((sp) => sp[2] & (1 << i)).reduce((a, sp) => a + (sp[1] - sp[0] + 1 / 15), 0) / dur < 0.85);
+  }
   /* ゴールが映っていた区間の帯（映っていない時間は検出できないので、正直に見せる） */
   function coverage(last) {
     const full = last.dur || app.duration() || 1;
@@ -8853,7 +8989,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     return h('div', { class: 'card' },
       h('b', null, 'どこを調べられたか'),
       rows,
-      h('div', { class: 'note' }, `灰色の時間はゴールが画面に映っていない（または追えなかった）ので、その間のシュートは検出できません。`),
+      h('div', { class: 'note' }, last.fixed ? '全景カメラなので、ゴールはずっと映っています。灰色の時間は、リングが選手などで隠れていた（または、カメラが動いた・ゴールの指定がずれている）時間です。その間のシュートは検出できません。' : `灰色の時間はゴールが画面に映っていない（または追えなかった）ので、その間のシュートは検出できません。`),
+      last.fixed && fixedLow(last) ? h('div', { class: 'note', style: { color: 'var(--warn)' } }, '⚠ ゴールを見張れた時間が少なめです。カメラが途中で動いた、または、ゴールの指定がずれているかもしれません。「ゴールを指定し直す」と改善することがあります。') : null,
       dur < full ? h('div', { class: 'note' }, `※ 今回は最初の ${BS.fmtTime(last.until)} だけを解析しました（帯もその範囲です）。`) : null,
       h('div', { class: 'note' }, `解析方式：${how}／${last.frames} コマ／${BS.fmtTime(last.wall)} で完了`));
   }
@@ -8879,7 +9016,8 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const W = app.media.width, H = app.media.height, sw = slot.clientWidth, sh = slot.clientHeight;
     if (!m || !m.rim || !(W > 0) || !(H > 0) || !(sw > 0) || !(sh > 0)) return null;
     const sc = Math.min(sw / W, sh / H), vw = W * sc, vh = H * sc, ox = (sw - vw) / 2, oy = (sh - vh) / 2;
-    const z = BS.clamp(52 / Math.max(1, (m.rim.w || 40) * sc), 1.3, 2.4);
+    // ふつう：リングが画面上で約 52 画素になる倍率（1.3〜2.4 倍）。全景カメラ：リング幅の約 14 倍の範囲が画面いっぱいになる倍率（最大 12 倍）
+    const z = cfg().fixed ? BS.clamp(sw / (14 * Math.max(1, m.rim.w || 30) * sc), 1.3, 12) : BS.clamp(52 / Math.max(1, (m.rim.w || 40) * sc), 1.3, 2.4);
     const clampT = (t, size, o, v) => { const lo = size - z * (o + v), hi = -z * o; return lo <= hi ? Math.min(hi, Math.max(lo, t)) : (size - z * v) / 2 - z * o; };
     const tx = clampT(sw / 2 - z * (ox + m.rim.cx * sc), sw, ox, vw), ty = clampT(sh / 2 - z * (oy + m.rim.cy * sc), sh, oy, vh);
     return { z, tx, ty };
@@ -9147,12 +9285,12 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
     const mk = S.marking;
     if (mk && mk.step === 1 && Math.abs(t - mk.t) > 0.02) {
       // 板を囲んだあとでコマが動いた：枠とリングが別のコマになってしまうので、囲むところからやり直す
-      mk.step = 0; mk.box = null; mk.view = null; mk.drag = null;
+      mk.step = 0; mk.box = null; mk.view = mk.pre || null; mk.drag = null;
       BS.ui.toast('コマが動いたので、バックボードを囲むところからやり直してください', 'warn', 4500);
       render(); drawOverlay();
       return;
     }
-    if (mk && mk.step === 0) { drawOverlay(); return; }
+    if (mk && mk.step <= 0) { drawOverlay(); return; }
     if (app.tab === 'auto' && !S.running && !S.marking) drawOverlay();
   }
 
@@ -9744,14 +9882,16 @@ table.tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; font-vari
   function openSample(opts) {
     opts = opts || {};
     if (!sampleGame) sampleGame = BS.sim.generate({});
-    const m = BS.createSynthMedia(sampleGame);
+    const wide = !!opts.wide;       // 全景カメラのサンプル（カメラは動かず、コート全体が映りっぱなし）
+    const m = BS.createSynthMedia(sampleGame, { wide, width: opts.width });
     setMedia(m);
     const events = opts.keepEvents || (opts.empty ? [] : sampleGame.events);
-    const p = sampleProject(sampleGame, events, opts.title);
+    const p = sampleProject(sampleGame, events, opts.title || (wide ? '全景カメラのサンプル（合成映像）ブルーウィングス vs レッドホークス' : undefined));
     // サンプル映像はゴールの位置が分かっているので、自動解析の「ゴールを指定」は最初から入れておく
     // （画面左のゴール＝前半は相手チームが攻める側）
     const marks = [0, 1].map((side) => m.renderer.hoopMark(side));
     if (marks[0] && marks[1]) p.auto = { hoops: marks.map((mk, i) => ({ id: i ? 'B' : 'A', t: mk.t, box: mk.box, rim: mk.rim })), hoopTeam: [1, 0] };
+    if (wide && p.auto) p.auto.fixed = true;
     store.set(p, 'load');
     if (opts.at != null) m.seek(opts.at);
     return m;
